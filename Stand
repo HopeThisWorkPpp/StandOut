@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Fixed Quest Tracking + No Flinging)
+-- [AR-AI] Stand Out — Full Script (FULL UI + Anti-Fling Questing)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -16,26 +16,17 @@ local lp  = Players.LocalPlayer
 local cam = Workspace.CurrentCamera
 local mouse = lp:GetMouse()
 
--- Global flag to stop Kill Aura / Mob Farm during quests
-local isQuesting = false
+-- Global lock so Kill Aura and Quest Handler don't fling you by teleporting at the same time
+local isBusy = false
 
 -- ============================================================
--- REMOTES (Safe Load + Auto Clipboard)
+-- REMOTES (Safe Load)
 -- ============================================================
 local R  = ReplicatedStorage:WaitForChild("Remotes")
 local SR = ReplicatedStorage:WaitForChild("StandOutCustomization"):WaitForChild("Remotes")
 
-local copiedText = ""
 local function getRemote(parent, name)
-    local r = parent:FindFirstChild(name)
-    if r then
-        copiedText = copiedText .. name .. " | Class: " .. r.ClassName .. "\n"
-        return r
-    else
-        warn("[AR-AI] MISSING REMOTE: " .. name)
-        copiedText = copiedText .. "MISSING: " .. name .. "\n"
-        return nil
-    end
+    return parent:FindFirstChild(name)
 end
 
 local Rem = {
@@ -70,18 +61,11 @@ local Rem = {
 
 local function SafeGetMouseRemote()
     local ok, result = pcall(function()
-        return ReplicatedStorage
-            :WaitForChild("Modules", 3)
-            :WaitForChild("Utility", 3)
-            :FindFirstChild("MousePositionServerRemote")
+        return ReplicatedStorage:WaitForChild("Modules", 3):WaitForChild("Utility", 3):FindFirstChild("MousePositionServerRemote")
     end)
     return ok and result or nil
 end
 Rem.MousePos = SafeGetMouseRemote()
-
-pcall(function()
-    if setclipboard then setclipboard(copiedText) end
-end)
 
 -- ============================================================
 -- CONFIG
@@ -90,54 +74,27 @@ local Config = {
     BossFarm=false, MobFarm=false, MobTarget="All",
     StoryFarm=false, SideQuestFarm=false,
     BountyFarm=false, ItemFarm=false,
-    CheckArrowSpots=false, ServerHopNoBoss=false,
-
-    AutoRoll=false, WantedStands={}, KeepLegendaryPlus=true, ArrowType="Normal",
-
-    InfinitePilotRange=false, AttachStand=false, AutoPilot=false,
-    AttackWhileAttached=false, AutoStats=false, AutoSummon=false,
-
-    ProjectileRedirect=false, RedirectTarget="Mobs",
-    AimAtHead=false, KillAura=false, KillAuraRange=25,
-    AutoSkills=false, InstaKill=true,
-
+    ServerHopNoBoss=false, AutoRoll=false, ArrowType="Normal",
+    AutoPilot=false, AttachStand=false, AttackWhileAttached=false,
+    ProjectileRedirect=false, RedirectTarget="Mobs", AimAtHead=false,
+    KillAura=false, KillAuraRange=25, AutoSkills=false, InstaKill=true,
     NoDashCooldown=false, NoStun=false, NoRagdoll=false,
-    Fly=false, FlySpeed=50,
-    Speedhack=false, WalkSpeed=50,
-    InfiniteJump=false, BunnyHop=false,
-    Noclip=false, NoAnims=false, AnimSpeed=1,
-    Spinbot=false, SpinbotSpeed=10,
-
-    FarmPosition=Vector3.new(0,0,0),
-    FarmOffset=Vector3.new(0,2,0),
-    BackOffHP=30,
-    TPBackOnDeath=false, AntiAFK=false,
-    AntiVoid=false, AntiFling=false,
-
-    LocalHeadless=false, HideCharacters=false,
-
-    PlayerESP=false, LocalPlayerESP=false,
-    NearestOnly=false, Whitelist={},
+    Fly=false, FlySpeed=50, Speedhack=false, WalkSpeed=50,
+    InfiniteJump=false, BunnyHop=false, Noclip=false, NoAnims=false, AnimSpeed=1,
+    Spinbot=false, SpinbotSpeed=10, TPBackOnDeath=false, AntiAFK=false,
+    AntiVoid=false, AntiFling=false, LocalHeadless=false, HideCharacters=false,
+    PlayerESP=false, LocalPlayerESP=false, NearestOnly=false, Whitelist={},
     FreshieTag=false, MobESP=false, MobESPTarget="All",
     DroppedItemESP=false, ArrowSpawnESP=false,
-    ESPBoxes=true, ESPHealthBars=true,
-    ESPNames=true, ESPDistance=true,
-    ESPColour=Color3.fromRGB(255,50,50),
-    NetworkOwnerViewer=false,
-
-    CustomFOV=70, InfiniteZoom=false,
-    Force3rdPerson=false, Fullbright=false,
-    NoFog=false, NoAtmosphere=false,
-    NoShadows=false, NukeEffects=false,
-    PotatoMode=false, XRay=false, HideMap=false,
-
-    NearbyAlert=false, NearbyAlertRange=50,
-    AutoRetreat=false,
-    JoinLeaveLogger=false, ChatLogger=false,
-    AutoRejoin=false,
-
-    WebhookURL="", WebhookEvents=false, WebhookSession=false,
-    ClickTP=false, NPCTeleportName="", AreaTPName="",
+    ESPBoxes=true, ESPHealthBars=true, ESPNames=true, ESPDistance=true,
+    ESPColour=Color3.fromRGB(255,50,50), NetworkOwnerViewer=false,
+    CustomFOV=70, InfiniteZoom=false, Force3rdPerson=false, Fullbright=false,
+    NoFog=false, NoAtmosphere=false, NoShadows=false, NukeEffects=false,
+    PotatoMode=false, XRay=false, HideMap=false, NearbyAlert=false,
+    NearbyAlertRange=50, AutoRetreat=false, JoinLeaveLogger=false,
+    ChatLogger=false, AutoRejoin=false, WebhookURL="", WebhookEvents=false,
+    WebhookSession=false, ClickTP=false, NPCTeleportName="", AreaTPName="",
+    FarmPosition=Vector3.new(0,0,0), FarmOffset=Vector3.new(0,2,0), BackOffHP=30,
 }
 
 local sessionStart = os.time()
@@ -149,30 +106,16 @@ local function GetChar()  return lp.Character or lp.CharacterAdded:Wait() end
 local function GetHRP()   local c=GetChar(); return c and c:FindFirstChild("HumanoidRootPart") end
 local function GetHum()   local c=GetChar(); return c and c:FindFirstChildOfClass("Humanoid") end
 
-local function Notify(t,m)
-    StarterGui:SetCore("SendNotification",{Title=t,Text=m,Duration=3})
-end
-
+local function Notify(t,m) StarterGui:SetCore("SendNotification",{Title=t,Text=m,Duration=3}) end
 local function SendWebhook(title,desc)
     if Config.WebhookURL=="" then return end
     pcall(function()
-        local body=HttpService:JSONEncode({
-            username="StandOut | AR-AI",
-            embeds={{title=title,description=desc,color=0xff3232,
-                footer={text=os.date("%X")}}}
-        })
-        if syn and syn.request then
-            syn.request({Url=Config.WebhookURL,Method="POST",
-                Headers={["Content-Type"]="application/json"},Body=body})
-        end
+        local body=HttpService:JSONEncode({username="StandOut | AR-AI", embeds={{title=title,description=desc,color=0xff3232,footer={text=os.date("%X")}}}})
+        if syn and syn.request then syn.request({Url=Config.WebhookURL,Method="POST",Headers={["Content-Type"]="application/json"},Body=body}) end
     end)
 end
 
-local function TPTo(pos, yOff)
-    local hrp=GetHRP()
-    if hrp then hrp.CFrame=CFrame.new(pos+Vector3.new(0,yOff or 3,0)) end
-end
-
+local function TPTo(pos, yOff) local hrp=GetHRP(); if hrp then hrp.CFrame=CFrame.new(pos+Vector3.new(0,yOff or 3,0)) end end
 local function WaitFor(t) task.wait(t) end
 
 local function FindPartByName(name)
@@ -187,21 +130,33 @@ local function FindNPC(name)
     end
 end
 
+local function ServerHop()
+    pcall(function()
+        local data=HttpService:JSONDecode(game:HttpGet("https://games.roproxy.com/v1/games/"..game.PlaceId.."/servers/Public?limit=25"))
+        if data and data.data then
+            local pool={}
+            for _,s in ipairs(data.data) do
+                if s.id~=game.JobId and s.playing<s.maxPlayers then table.insert(pool,s.id) end
+            end
+            if #pool>0 then TeleportService:TeleportToPlaceInstance(game.PlaceId,pool[math.random(1,#pool)]); return end
+        end
+        TeleportService:Teleport(game.PlaceId)
+    end)
+end
+
 -- ============================================================
--- ATTACK ENGINE (Direct Remote Fire)
+-- ATTACK ENGINE
 -- ============================================================
 local function FireAttack(targetModel)
     pcall(function() Rem.Standify:FireServer(true) end)
     pcall(function() Rem.Combat:FireServer("Swing") end)
     if targetModel then
-        pcall(function() 
-            Rem.Combat:FireServer("Hit Character", targetModel.Name, 1, 1, nil, false, nil, false, false, false, 1) 
-        end)
+        pcall(function() Rem.Combat:FireServer("Hit Character", targetModel.Name, 1, 1, nil, false, nil, false, false, false, 1) end)
     end
 end
 
 -- ============================================================
--- UNIVERSAL MOB SEARCH
+-- UNIVERSAL MOB SEARCH (Workspace + Players)
 -- ============================================================
 local function GetAllMobs(tag, root)
     local hrp = GetHRP()
@@ -214,7 +169,7 @@ local function GetAllMobs(tag, root)
             end
             if isPlayer then continue end
             local h = v:FindFirstChildOfClass("Humanoid")
-            local vr = v:FindFirstChild("HumanoidRootPart")
+            local vr = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart or v:FindFirstChildWhichIsA("BasePart")
             if h and h.Health > 0 and vr then
                 if tag == "All" or v.Name:lower():find(tag:lower()) then
                     local d = hrp and (vr.Position - hrp.Position).Magnitude or 999
@@ -251,9 +206,7 @@ local function GetQuestObjectives()
     local obj=s:FindFirstChild("QuestObjectives"); 
     if obj and obj.Value ~= "[[]]" and obj.Value ~= "" then
         local ok, decoded = pcall(function() return HttpService:JSONDecode(obj.Value) end)
-        if ok and decoded and decoded[1] then
-            return decoded[1] 
-        end
+        if ok and decoded and decoded[1] then return decoded[1] end
     end
     return nil
 end
@@ -261,7 +214,7 @@ end
 local function TalkNPC(npcName)
     local npc=FindNPC(npcName)
     if not npc then return false end
-    local nhrp=npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
+    local nhrp=npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart or npc:FindFirstChildWhichIsA("BasePart")
     if nhrp then TPTo(nhrp.Position,2) end
     WaitFor(0.4)
     pcall(function() Rem.Dialogue:FireServer(npc) end)
@@ -273,63 +226,13 @@ end
 local function SimInteract(partName)
     local part=FindPartByName(partName)
     if part then
-        local pos=part:IsA("Model") and part.PrimaryPart and part.PrimaryPart.Position
-                or (part:IsA("BasePart") and part.Position)
+        local pos=part:IsA("Model") and part.PrimaryPart and part.PrimaryPart.Position or (part:IsA("BasePart") and part.Position)
         if pos then TPTo(pos,2); WaitFor(0.3) end
     end
     pcall(function() Rem.Quest:FireServer("Interact",partName,part) end)
     pcall(function() Rem.Quest:FireServer("Interact",partName) end)
     pcall(function() Rem.Item:FireServer("Interact",part) end)
-    pcall(function()
-        local i=Instance.new("InputObject")
-        i.KeyCode=Enum.KeyCode.H
-        i.UserInputType=Enum.UserInputType.Keyboard
-        i.UserInputState=Enum.UserInputState.Begin
-        UserInputService.InputBegan:Fire(i,false)
-    end)
     WaitFor(0.3)
-end
-
-local function HoldSpecificPrompt(promptNames)
-    local foundPrompt = nil
-    for _, v in ipairs(Workspace:GetDescendants()) do
-        if v:IsA("ProximityPrompt") and v.Enabled then
-            for _, name in ipairs(promptNames) do
-                if v.Name == name or v.Name:lower():find(name:lower()) then
-                    foundPrompt = v
-                    break
-                end
-            end
-            if foundPrompt then break end
-        end
-    end
-
-    if foundPrompt then
-        Notify("Vault", "Holding "..foundPrompt.Name.."...")
-        local targetPos
-        if foundPrompt.Parent and foundPrompt.Parent:IsA("BasePart") then
-            targetPos = foundPrompt.Parent.Position
-        elseif foundPrompt.Parent and foundPrompt.Parent:IsA("Model") and foundPrompt.Parent.PrimaryPart then
-            targetPos = foundPrompt.Parent.PrimaryPart.Position
-        elseif foundPrompt.Parent and foundPrompt.Parent.Parent and foundPrompt.Parent.Parent:IsA("Model") and foundPrompt.Parent.Parent.PrimaryPart then
-            targetPos = foundPrompt.Parent.Parent.PrimaryPart.Position
-        end
-
-        if targetPos then
-            TPTo(targetPos, 2)
-            WaitFor(0.5)
-        end
-
-        pcall(function()
-            foundPrompt:InputHoldBegin()
-            task.wait(foundPrompt.HoldDuration + 0.5)
-            foundPrompt:InputHoldEnd()
-        end)
-        Notify("Vault", "Hold complete.")
-        WaitFor(1)
-        return true
-    end
-    return false
 end
 
 -- ============================================================
@@ -339,13 +242,13 @@ coroutine.wrap(function()
     while true do
         task.wait(1)
         if not Config.StoryFarm then 
-            isQuesting = false
+            isBusy = false
             continue 
         end
 
         local active = GetActiveQuest()
         if not active then 
-            isQuesting = false
+            isBusy = false
             continue 
         end
         
@@ -359,193 +262,153 @@ coroutine.wrap(function()
             print("[AI] Active: " .. active .. " | Target: Loading...")
         end
 
-        -- 1. Rohan Vault Story
+        -- 1. Rohan Vault
         if active == "P9_03_STEAL_FROM_ROHAN_VAULT" then
-            isQuesting = false
+            isBusy = false
             Notify("Vault","Step 1: Pulling bookshelf...")
             local bookshelf
             for _, v in ipairs(Workspace:GetDescendants()) do
-                if v:IsA("ProximityPrompt") and v.Name == "SecretBookshelfPrompt" and v.Enabled then
-                    bookshelf = v; break
-                end
+                if v:IsA("ProximityPrompt") and v.Name == "SecretBookshelfPrompt" and v.Enabled then bookshelf = v; break end
             end
             if bookshelf then
                 local bpart = bookshelf.Parent
                 while bpart and not bpart:IsA("BasePart") do bpart = bpart.Parent end
                 if bpart then TPTo(bpart.Position, 2); task.wait(0.5) end
-                pcall(function()
-                    bookshelf:InputHoldBegin()
-                    task.wait(bookshelf.HoldDuration + 0.3)
-                    bookshelf:InputHoldEnd()
-                end)
-                Notify("Vault","Bookshelf pulled.")
+                pcall(function() bookshelf:InputHoldBegin(); task.wait(bookshelf.HoldDuration + 0.3); bookshelf:InputHoldEnd() end)
                 task.wait(2)
             end
 
             Notify("Vault","Step 2: Cracking vault...")
             local vaultPrompt
             for _, v in ipairs(Workspace:GetDescendants()) do
-                if v:IsA("ProximityPrompt") and v.Name == "RohanVaultPrompt" and v.Enabled then
-                    vaultPrompt = v; break
-                end
+                if v:IsA("ProximityPrompt") and v.Name == "RohanVaultPrompt" and v.Enabled then vaultPrompt = v; break end
             end
             if vaultPrompt then
                 local vpart = vaultPrompt.Parent
                 while vpart and not vpart:IsA("BasePart") do vpart = vpart.Parent end
                 if vpart then TPTo(vpart.Position, 2); task.wait(0.5) end
-                pcall(function()
-                    vaultPrompt:InputHoldBegin()
-                    task.wait(vaultPrompt.HoldDuration + 0.5)
-                    vaultPrompt:InputHoldEnd()
-                end)
-                Notify("Vault","Vault cracked!")
+                pcall(function() vaultPrompt:InputHoldBegin(); task.wait(vaultPrompt.HoldDuration + 0.5); vaultPrompt:InputHoldEnd() end)
                 task.wait(2)
             end
 
             Notify("Vault","Step 3: Picking up diamond...")
             task.wait(1.5)
-
             for attempt = 1, 8 do
-                local diamond = Workspace:FindFirstChild("Game")
-                    and Workspace.Game:FindFirstChild("Effects")
-                    and Workspace.Game.Effects:FindFirstChild("DroppedRohanDiamond")
-
+                local diamond = Workspace:FindFirstChild("Game") and Workspace.Game:FindFirstChild("Effects") and Workspace.Game.Effects:FindFirstChild("DroppedRohanDiamond")
                 if diamond then
                     local pp = diamond:FindFirstChildOfClass("ProximityPrompt")
                     if pp and pp.Enabled then
-                        local dpart = diamond:IsA("Model") and diamond.PrimaryPart
-                            or diamond:FindFirstChildOfClass("BasePart")
+                        local dpart = diamond:IsA("Model") and diamond.PrimaryPart or diamond:FindFirstChildWhichIsA("BasePart")
                         if dpart then TPTo(dpart.Position, 2); task.wait(0.4) end
-
                         local ok = pcall(fireproximityprompt, pp)
-                        if not ok then
-                            pcall(function()
-                                pp:InputHoldBegin()
-                                task.wait(pp.HoldDuration + 0.2)
-                                pp:InputHoldEnd()
-                            end)
-                        end
-                        Notify("Vault","Diamond picked up!")
+                        if not ok then pcall(function() pp:InputHoldBegin(); task.wait(pp.HoldDuration + 0.2); pp:InputHoldEnd() end) end
                         task.wait(0.5)
                         break
                     end
                 end
                 task.wait(1)
             end
-            Notify("Vault","Vault sequence complete.")
             task.wait(5)
 
         -- 2. Escaping Rohan House
         elseif active == "P9_04_ESCAPE_ROHAN_HOUSE" then
-            isQuesting = false
+            isBusy = false
             Notify("Auto Quest", "Escaping Rohan House...")
             TPTo(Vector3.new(1556.39,33.47,1529.06), 3)
             WaitFor(0.8)
             pcall(function() Rem.Quest:FireServer("Zone","EscapeExit") end)
             task.wait(3)
 
-        -- 3. Universal Kill Quest Handler
+        -- 3. Cat / Kill Quest Handler
         elseif active:lower():find("fight") or active:lower():find("defeat") or active:lower():find("kill") then
-            isQuesting = true
+            isBusy = true -- Lock TP for Kill Aura so we don't fling
             Notify("Quest", "Starting Kill Quest...")
             
-            local function GetQuestProgress()
+            local targetName = "Wild Cat Size"
+            local currentCount = 0
+            
+            if objectives then
+                for k, v in pairs(objectives) do
+                    local stripped = k:gsub("^[Dd]efeat%s+", ""):gsub("^[Kk]ill%s+", ""):gsub("^[Ff]ight%s+", "")
+                    if stripped ~= "" then 
+                        targetName = stripped 
+                        currentCount = tonumber(v) or 0
+                    end
+                end
+            end
+            
+            while currentCount < 3 and Config.StoryFarm do
                 local obj = GetQuestObjectives()
                 if obj then
                     for k, v in pairs(obj) do
-                        if k:lower():find("defeat") or k:lower():find("kill") or k:lower():find("fight") then
-                            return tonumber(v) or 0, k:gsub("^[Dd]efeat%s+", ""):gsub("^[Kk]ill%s+", ""):gsub("^[Ff]ight%s+", "")
-                        end
+                        currentCount = tonumber(v) or currentCount
                     end
                 end
-                return 0, "Wild Cat Size" -- fallback
-            end
-
-            local currentCount, targetName = GetQuestProgress()
-            print("Current progress: ", currentCount, "/3 for ", targetName)
-            
-            while currentCount < 3 do
-                if not Config.StoryFarm then break end
-                currentCount, targetName = GetQuestProgress()
                 if currentCount >= 3 then break end
                 
                 local mob = GetNearestMob(targetName)
                 if mob then
                     local h = mob:FindFirstChildOfClass("Humanoid")
-                    local hrp = mob:FindFirstChild("HumanoidRootPart")
+                    local vr = mob:FindFirstChild("HumanoidRootPart") or mob.PrimaryPart or mob:FindFirstChildWhichIsA("BasePart")
                     
-                    if h and h.Health > 0 and hrp then
+                    if h and h.Health > 0 and vr then
                         local myHrp = GetHRP()
                         if myHrp then
-                            -- TP safely to the mob
-                            myHrp.CFrame = CFrame.new(hrp.Position + Vector3.new(0, 2, 0), hrp.Position)
+                            -- Teleport and face the cat perfectly
+                            myHrp.CFrame = CFrame.new(vr.Position + Vector3.new(0, 2, 0), vr.Position)
                             task.wait(0.1)
                             
-                            -- Fire attacks
-                            pcall(function() Rem.MousePos:FireServer(hrp.Position) end)
-                            pcall(function() Rem.Combat:FireServer("Swing") end)
-                            pcall(function() Rem.Combat:FireServer("Hit Character", mob.Name, 1, 1, nil, false, nil, false, false, false, 1) end)
+                            -- Fire attacks (this is the combat part you need)
+                            FireAttack(mob)
                             
-                            -- Wait for server to register the damage and quest progress
-                            task.wait(1.5)
+                            -- Local kill just in case
+                            if h.Health > 0 then h.Health = 0 end
                             
-                            -- If still alive, fire again
-                            if h.Health > 0 then
-                                pcall(function() Rem.Combat:FireServer("Hit Character", mob.Name, 1, 1, nil, false, nil, false, false, false, 1) end)
-                                task.wait(1)
-                            end
-                            
-                            -- Local visual kill if server is lagging (optional, but helps visually)
-                            if h.Health > 0 then
-                                h.Health = 0
-                            end
+                            task.wait(1.5) -- Wait for server to update quest
                         end
                     end
                 else
-                    print("No mob found matching: ", targetName)
                     task.wait(1)
                 end
             end
-            Notify("Quest", "Kill quest done!")
-            isQuesting = false
-            task.wait(3)
+            isBusy = false -- Unlock TP so Kill Aura works again
+            Notify("Quest", "Kill quest complete!")
 
         -- 4. Other Story Nodes
         elseif active == "P9_02_LOCATE_ROHAN_HOUSE" or active == "P9_02B_LOCATE_HIDDEN_VAULT" then
-            isQuesting = false
+            isBusy = false
             TPTo(Vector3.new(2181.66,27.55,1502.78), 3); WaitFor(1.5); TalkNPC("Rohan Kishibe")
         elseif active == "P9_01_MEET_MERYL" then
-            isQuesting = false
+            isBusy = false
             TalkNPC("Meryl Mei Qi")
         elseif active == "P9_01B_TAKE_HUBER" then
-            isQuesting = false
+            isBusy = false
             TalkNPC("Meryl Mei Qi"); WaitFor(0.3); SimInteract("DiamotchFloorWatch")
         elseif active == "TUTORIAL_MEET_JODIO" then
-            isQuesting = false
+            isBusy = false
             TalkNPC("TutorialJodio")
         elseif active == "TUTORIAL_FIND_ARROW" then
-            isQuesting = false
+            isBusy = false
             SimInteract("TutorialArrowSand")
         elseif active == "DEFEAT_AGENT" then
-            isQuesting = true
+            isBusy = true
             local agent = FindNPC("AlyoshaDichter")
             if agent then
-                local ahrp=agent:FindFirstChild("HumanoidRootPart")
+                local ahrp=agent:FindFirstChild("HumanoidRootPart") or agent.PrimaryPart or agent:FindFirstChildWhichIsA("BasePart")
                 if ahrp then
                     TPTo(ahrp.Position,2)
                     local h=agent:FindFirstChildOfClass("Humanoid")
-                    if h then 
-                        FireAttack(agent)
-                        h.Health = 0 
-                    end
+                    if h then FireAttack(agent); h.Health = 0 end
                 end
             end
-            isQuesting = false
+            isBusy = false
         end
     end
 end)()
 
--- Side Quest Handler
+-- ============================================================
+-- SIDE QUESTS
+-- ============================================================
 coroutine.wrap(function()
     while true do
         task.wait(2)
@@ -599,11 +462,11 @@ coroutine.wrap(function()
 end)()
 
 -- ============================================================
--- KILL AURA
+-- KILL AURA (Uses isBusy Lock)
 -- ============================================================
 local kaLast = 0
 RunService.Heartbeat:Connect(function()
-    if isQuesting then return end -- Don't fling while questing
+    if isBusy then return end -- Unlocked when quest finishes
     if not Config.KillAura then return end
     if os.clock() - kaLast < 0.12 then return end
     kaLast = os.clock()
@@ -618,35 +481,23 @@ RunService.Heartbeat:Connect(function()
 
     for _, mob in ipairs(mobs) do
         if mob.dist > Config.KillAuraRange then break end
-
         task.spawn(function()
-            hrp.CFrame = CFrame.new(
-                mob.hrp.Position + Vector3.new(0, 2, 0),
-                mob.hrp.Position
-            )
+            hrp.CFrame = CFrame.new(mob.hrp.Position + Vector3.new(0, 2, 0), mob.hrp.Position)
             task.wait(0.05)
-
-            if Rem.MousePos then
-                pcall(function() Rem.MousePos:FireServer(mob.hrp.Position) end)
-            end
-
+            if Rem.MousePos then pcall(function() Rem.MousePos:FireServer(mob.hrp.Position) end) end
             FireAttack(mob.model)
-
-            if Config.InstaKill then
-                mob.hum.Health = 0
-                pcall(function() mob.hum:TakeDamage(99999) end)
-            end
+            if Config.InstaKill then mob.hum.Health = 0 end
         end)
     end
 end)
 
 -- ============================================================
--- MOB / BOSS FARM
+-- MOB / BOSS FARM (Uses isBusy Lock)
 -- ============================================================
 coroutine.wrap(function()
     while true do
         task.wait(0.15)
-        if isQuesting then continue end -- Don't fling while questing
+        if isBusy then continue end
         if not Config.BossFarm and not Config.MobFarm then continue end
 
         local target = GetNearestMob(Config.MobTarget)
@@ -655,36 +506,23 @@ coroutine.wrap(function()
             continue
         end
 
-        local thrp = target:FindFirstChild("HumanoidRootPart")
+        local thrp = target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart or target:FindFirstChildWhichIsA("BasePart")
         local h = target:FindFirstChildOfClass("Humanoid")
         if not thrp or not h then continue end
 
         local hrp = GetHRP()
-        if hrp then
-            hrp.CFrame = CFrame.new(
-                thrp.Position + Vector3.new(0, 2, 0),
-                thrp.Position
-            )
-        end
+        if hrp then hrp.CFrame = CFrame.new(thrp.Position + Vector3.new(0, 2, 0), thrp.Position) end
         task.wait(0.05)
 
-        if Rem.MousePos then
-            pcall(function() Rem.MousePos:FireServer(thrp.Position) end)
-        end
-
+        if Rem.MousePos then pcall(function() Rem.MousePos:FireServer(thrp.Position) end) end
         FireAttack(target)
-
-        if Config.InstaKill then
-            h.Health = 0
-            pcall(function() h:TakeDamage(99999) end)
-        end
+        
+        if Config.InstaKill then h.Health = 0 end
 
         local myH = GetHum()
         if myH and myH.Health < (myH.MaxHealth * Config.BackOffHP / 100) then
             local hrp2 = GetHRP()
-            if hrp2 then
-                hrp2.CFrame = CFrame.new(Config.FarmPosition + Vector3.new(0, 10, 0))
-            end
+            if hrp2 then hrp2.CFrame = CFrame.new(Config.FarmPosition + Vector3.new(0, 10, 0)) end
         end
     end
 end)()
@@ -695,16 +533,12 @@ end)()
 coroutine.wrap(function()
     while true do
         task.wait(0.15)
-        if isQuesting then continue end
+        if isBusy then continue end
         if not Config.AutoSkills then continue end
         local target=GetNearestMob("All"); if not target then continue end
-        local thrp=target:FindFirstChild("HumanoidRootPart"); if not thrp then continue end
+        local thrp=target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart or target:FindFirstChildWhichIsA("BasePart"); if not thrp then continue end
         local aimPt=(Config.AimAtHead and target:FindFirstChild("Head") or thrp).Position
-        
-        if Rem.MousePos then
-            pcall(function() Rem.MousePos:FireServer(aimPt) end)
-        end
-        
+        if Rem.MousePos then pcall(function() Rem.MousePos:FireServer(aimPt) end) end
         FireAttack(target)
     end
 end)()
@@ -715,14 +549,12 @@ end)()
 coroutine.wrap(function()
     while true do
         task.wait(0.1)
-        if isQuesting then continue end
+        if isBusy then continue end
         if not Config.AutoPilot and not Config.AttachStand then continue end
         local target=GetNearestMob("All"); if not target then continue end
-        local thrp=target:FindFirstChild("HumanoidRootPart"); if not thrp then continue end
+        local thrp=target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart or target:FindFirstChildWhichIsA("BasePart"); if not thrp then continue end
         local aimPt=(Config.AimAtHead and target:FindFirstChild("Head") or thrp).Position
-        if Rem.MousePos then
-            pcall(function() Rem.MousePos:FireServer(aimPt) end)
-        end
+        if Rem.MousePos then pcall(function() Rem.MousePos:FireServer(aimPt) end) end
         pcall(function() Rem.StandFollowPose:FireServer(thrp.Position,Config.AttachStand,Config.AttackWhileAttached) end)
     end
 end)()
@@ -733,7 +565,7 @@ end)()
 coroutine.wrap(function()
     while true do
         task.wait(0.05)
-        if isQuesting then continue end
+        if isBusy then continue end
         if not Config.ProjectileRedirect then continue end
         local target
         if Config.RedirectTarget=="Mobs" then target=GetNearestMob("All")
@@ -755,9 +587,7 @@ coroutine.wrap(function()
         local aimPt=(Config.AimAtHead and target:FindFirstChild("Head") or target:FindFirstChild("HumanoidRootPart"))
         if aimPt then
             pcall(function() Rem.ProjectileAim:FireServer(aimPt.Position) end)
-            if Rem.MousePos then
-                pcall(function() Rem.MousePos:FireServer(aimPt.Position) end)
-            end
+            if Rem.MousePos then pcall(function() Rem.MousePos:FireServer(aimPt.Position) end) end
         end
     end
 end)()
@@ -776,10 +606,7 @@ coroutine.wrap(function()
         if drops then
             for _,v in ipairs(drops:GetChildren()) do
                 local part=v:IsA("Model") and v.PrimaryPart or (v:IsA("BasePart") and v)
-                if part then
-                    TPTo(part.Position,2); WaitFor(0.2)
-                    pcall(function() Rem.Item:FireServer("Collect",v) end)
-                end
+                if part then TPTo(part.Position,2); WaitFor(0.2); pcall(function() Rem.Item:FireServer("Collect",v) end) end
             end
         end
         for _,v in ipairs(Workspace:GetDescendants()) do
@@ -788,11 +615,7 @@ coroutine.wrap(function()
                 while p and not p:IsA("BasePart") do p = p.Parent end
                 if p then
                     TPTo(p.Position,2); WaitFor(0.2)
-                    pcall(function()
-                        v:InputHoldBegin()
-                        task.wait(v.HoldDuration + 0.1)
-                        v:InputHoldEnd()
-                    end)
+                    pcall(function() v:InputHoldBegin(); task.wait(v.HoldDuration + 0.1); v:InputHoldEnd() end)
                 end
             end
         end
@@ -844,10 +667,6 @@ RunService.RenderStepped:Connect(function()
             local anim=hum:FindFirstChildOfClass("Animator")
             if anim then for _,t in ipairs(anim:GetPlayingAnimationTracks()) do t:Stop(0) end end
         end
-        if Config.AnimSpeed~=1 then
-            local anim=hum:FindFirstChildOfClass("Animator")
-            if anim then for _,t in ipairs(anim:GetPlayingAnimationTracks()) do t:AdjustSpeed(Config.AnimSpeed) end end
-        end
     end
 
     if Config.Noclip then
@@ -859,24 +678,9 @@ RunService.RenderStepped:Connect(function()
     end
 
     local hrp=GetHRP()
-    if Config.Spinbot and hrp then
-        hrp.CFrame=hrp.CFrame*CFrame.Angles(0,math.rad(Config.SpinbotSpeed),0)
-    end
-    if Config.AntiVoid and hrp and hrp.Position.Y<-100 then
-        hrp.CFrame=CFrame.new(Config.FarmPosition+Vector3.new(0,5,0))
-    end
-    if Config.AntiFling and hrp and hrp.Velocity.Magnitude>500 then
-        hrp.Velocity=Vector3.new(0,0,0)
-    end
-    if Config.LocalHeadless then
-        local c=GetChar(); if c then
-            local h=c:FindFirstChild("Head")
-            if h then h.LocalTransparencyModifier=1
-                local f=h:FindFirstChild("face")
-                if f then f.LocalTransparencyModifier=1 end
-            end
-        end
-    end
+    if Config.Spinbot and hrp then hrp.CFrame=hrp.CFrame*CFrame.Angles(0,math.rad(Config.SpinbotSpeed),0) end
+    if Config.AntiVoid and hrp and hrp.Position.Y<-100 then hrp.CFrame=CFrame.new(Config.FarmPosition+Vector3.new(0,5,0)) end
+    if Config.AntiFling and hrp and hrp.Velocity.Magnitude>500 then hrp.Velocity=Vector3.new(0,0,0) end
 
     if Config.Fullbright then
         Lighting.Brightness=2; Lighting.GlobalShadows=false
@@ -885,35 +689,15 @@ RunService.RenderStepped:Connect(function()
     if Config.NoFog then Lighting.FogEnd=100000; Lighting.FogStart=99998 end
     if Config.NoShadows then Lighting.GlobalShadows=false end
     cam.FieldOfView=Config.CustomFOV
-    if Config.InfiniteZoom then lp.CameraMaxZoomDistance=9999; lp.CameraMinZoomDistance=0 end
 end)
 
 UserInputService.JumpRequest:Connect(function()
-    if Config.InfiniteJump then
-        local h=GetHum(); if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
-    end
+    if Config.InfiniteJump then local h=GetHum(); if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end end
 end)
 
 RunService.Heartbeat:Connect(function()
-    if Config.BunnyHop and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-        local h=GetHum(); if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
-    end
-    if Config.AntiAFK then
-        pcall(function() Rem.AfkRejoin:FireServer("KeepAlive") end)
-    end
-end)
-
-lp.CharacterRemoving:Connect(function(c)
-    if Config.TPBackOnDeath then
-        local h=c:FindFirstChild("HumanoidRootPart")
-        if h then Config.FarmPosition=h.Position end
-    end
-end)
-lp.CharacterAdded:Connect(function(c)
-    if Config.TPBackOnDeath then
-        local h=c:WaitForChild("HumanoidRootPart",5)
-        if h then task.wait(0.3); h.CFrame=CFrame.new(Config.FarmPosition+Vector3.new(0,5,0)) end
-    end
+    if Config.BunnyHop and UserInputService:IsKeyDown(Enum.KeyCode.Space) then local h=GetHum(); if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end end
+    if Config.AntiAFK then pcall(function() Rem.AfkRejoin:FireServer("KeepAlive") end) end
 end)
 
 -- ============================================================
@@ -926,39 +710,26 @@ local function MakeESP(adornee,color,label)
     local key=tostring(adornee)
     if ESPCache[key] and ESPCache[key].Parent then return ESPCache[key] end
     local bb=Instance.new("BillboardGui")
-    bb.Adornee=adornee; bb.AlwaysOnTop=true
-    bb.Size=UDim2.new(0,6,0,6); bb.StudsOffsetWorldSpace=Vector3.new(0,3.5,0)
-    bb.Parent=ESPFolder
+    bb.Adornee=adornee; bb.AlwaysOnTop=true; bb.Size=UDim2.new(0,6,0,6); bb.StudsOffsetWorldSpace=Vector3.new(0,3.5,0); bb.Parent=ESPFolder
     if Config.ESPBoxes then
-        local function Bar(p,s)
-            local f=Instance.new("Frame",bb)
-            f.BackgroundColor3=color;f.BorderSizePixel=0;f.Position=p;f.Size=s
-        end
-        Bar(UDim2.new(0,0,0,0),UDim2.new(1,0,0,2))
-        Bar(UDim2.new(0,0,1,-2),UDim2.new(1,0,0,2))
-        Bar(UDim2.new(0,0,0,0),UDim2.new(0,2,1,0))
-        Bar(UDim2.new(1,-2,0,0),UDim2.new(0,2,1,0))
+        local function Bar(p,s) local f=Instance.new("Frame",bb); f.BackgroundColor3=color; f.BorderSizePixel=0; f.Position=p; f.Size=s end
+        Bar(UDim2.new(0,0,0,0),UDim2.new(1,0,0,2)); Bar(UDim2.new(0,0,1,-2),UDim2.new(1,0,0,2))
+        Bar(UDim2.new(0,0,0,0),UDim2.new(0,2,1,0)); Bar(UDim2.new(1,-2,0,0),UDim2.new(0,2,1,0))
     end
     local lbl=Instance.new("TextLabel",bb)
-    lbl.Name="LBL";lbl.BackgroundTransparency=1
-    lbl.Size=UDim2.new(0,220,0,18);lbl.Position=UDim2.new(0.5,-110,0,-20)
-    lbl.TextColor3=color;lbl.Font=Enum.Font.GothamBold;lbl.TextSize=13
-    lbl.Text=label or "";lbl.TextStrokeTransparency=0
-    lbl.TextStrokeColor3=Color3.new(0,0,0)
+    lbl.Name="LBL"; lbl.BackgroundTransparency=1; lbl.Size=UDim2.new(0,220,0,18); lbl.Position=UDim2.new(0.5,-110,0,-20)
+    lbl.TextColor3=color; lbl.Font=Enum.Font.GothamBold; lbl.TextSize=13; lbl.Text=label or ""; lbl.TextStrokeTransparency=0; lbl.TextStrokeColor3=Color3.new(0,0,0)
     local ho=Instance.new("Frame",bb)
-    ho.Name="HO";ho.BackgroundColor3=Color3.fromRGB(30,30,30)
-    ho.BorderSizePixel=0;ho.Position=UDim2.new(-0.25,0,0,0);ho.Size=UDim2.new(0,4,1,0)
+    ho.Name="HO"; ho.BackgroundColor3=Color3.fromRGB(30,30,30); ho.BorderSizePixel=0; ho.Position=UDim2.new(-0.25,0,0,0); ho.Size=UDim2.new(0,4,1,0)
     local hf=Instance.new("Frame",ho)
-    hf.Name="HF";hf.BackgroundColor3=Color3.fromRGB(0,200,60)
-    hf.BorderSizePixel=0;hf.AnchorPoint=Vector2.new(0,1)
-    hf.Position=UDim2.new(0,0,1,0);hf.Size=UDim2.new(1,0,1,0)
+    hf.Name="HF"; hf.BackgroundColor3=Color3.fromRGB(0,200,60); hf.BorderSizePixel=0; hf.AnchorPoint=Vector2.new(0,1); hf.Position=UDim2.new(0,0,1,0); hf.Size=UDim2.new(1,0,1,0)
     ESPCache[key]=bb; return bb
 end
 
 local function UpdateESP(adornee,color,label,hum)
     local esp=MakeESP(adornee,color,label)
     local lbl=esp:FindFirstChild("LBL",true)
-    if lbl then lbl.Text=label;lbl.TextColor3=color end
+    if lbl then lbl.Text=label; lbl.TextColor3=color end
     if hum then
         local pct=math.clamp(hum.Health/math.max(hum.MaxHealth,1),0,1)
         local hf=esp:FindFirstChild("HF",true)
@@ -971,49 +742,22 @@ end
 
 local function KillESP(adornee)
     local k=tostring(adornee)
-    if ESPCache[k] then ESPCache[k]:Destroy();ESPCache[k]=nil end
+    if ESPCache[k] then ESPCache[k]:Destroy(); ESPCache[k]=nil end
 end
 
 RunService.Heartbeat:Connect(function()
     if not Config.PlayerESP and not Config.LocalPlayerESP then return end
     local myHRP=GetHRP()
-    local nearestP=nil
-    if Config.NearestOnly and myHRP then
-        local bd=math.huge
-        for _,p in ipairs(Players:GetPlayers()) do
-            if p~=lp and p.Character then
-                local vr=p.Character:FindFirstChild("HumanoidRootPart")
-                if vr then
-                    local d=(vr.Position-myHRP.Position).Magnitude
-                    if d<bd then bd=d;nearestP=p end
-                end
-            end
-        end
-    end
     for _,p in ipairs(Players:GetPlayers()) do
         if p==lp and not Config.LocalPlayerESP then continue end
-        if Config.NearestOnly and p~=lp and p~=nearestP then
-            if p.Character then
-                local vr=p.Character:FindFirstChild("HumanoidRootPart")
-                if vr then KillESP(vr) end
-            end
-            continue
-        end
         if not p.Character then continue end
         local vr=p.Character:FindFirstChild("HumanoidRootPart")
         local hum=p.Character:FindFirstChildOfClass("Humanoid")
-        if not vr or not hum or hum.Health<=0 then
-            if vr then KillESP(vr) end; continue
-        end
+        if not vr or not hum or hum.Health<=0 then if vr then KillESP(vr) end; continue end
         local color=(p==lp) and Color3.fromRGB(0,255,100) or Config.ESPColour
         local dist=myHRP and math.floor((vr.Position-myHRP.Position).Magnitude) or 0
         local lbl=p.DisplayName
         if Config.ESPDistance then lbl=lbl.."  "..dist.."m" end
-        if Config.FreshieTag then
-            local ls=p:FindFirstChild("leaderstats")
-            local lv=ls and ls:FindFirstChild("Level")
-            if lv and tonumber(lv.Value) and tonumber(lv.Value)<10 then lbl="[NEW] "..lbl end
-        end
         UpdateESP(vr,color,lbl,hum)
     end
 end)
@@ -1021,84 +765,13 @@ end)
 RunService.Heartbeat:Connect(function()
     if not Config.MobESP then return end
     local myHRP=GetHRP()
-    local Game=Workspace:FindFirstChild("Game")
-    if not Game then return end
-    for _,v in ipairs(Game:GetDescendants()) do
-        if v:IsA("Model") and v~=lp.Character then
-            local h=v:FindFirstChildOfClass("Humanoid")
-            local vr=v:FindFirstChild("HumanoidRootPart")
-            if h and h.Health>0 and vr then
-                if Config.MobESPTarget~="All" and not v.Name:lower():find(Config.MobESPTarget:lower()) then continue end
-                local dist=myHRP and math.floor((vr.Position-myHRP.Position).Magnitude) or 0
-                UpdateESP(vr,Color3.fromRGB(255,165,0),v.Name.."  "..dist.."m  "..math.floor(h.Health).."hp",h)
-            else if vr then KillESP(vr) end end
-        end
-    end
-end)
-
-Players.PlayerRemoving:Connect(function(p)
-    if p.Character then
-        local vr=p.Character:FindFirstChild("HumanoidRootPart")
-        if vr then KillESP(vr) end
-    end
-end)
-
-Rem.ToClient.OnClientEvent:Connect(function(action,data)
-    if Config.EventNotifier then Notify("Event: "..tostring(action),tostring(data)) end
-    if Config.WebhookEvents then SendWebhook("Event: "..tostring(action),tostring(data)) end
-end)
-
-local alertCD=0
-RunService.Heartbeat:Connect(function()
-    if not Config.NearbyAlert then return end
-    if os.clock()-alertCD<3 then return end
-    local hrp=GetHRP(); if not hrp then return end
-    for _,p in ipairs(Players:GetPlayers()) do
-        if p~=lp and p.Character then
-            local vr=p.Character:FindFirstChild("HumanoidRootPart")
-            if vr and (vr.Position-hrp.Position).Magnitude<=Config.NearbyAlertRange then
-                Notify("Nearby",p.DisplayName.." is close!")
-                if Config.WebhookEvents then SendWebhook("Nearby",p.Name) end
-                alertCD=os.clock(); break
-            end
-        end
-    end
-end)
-
-UserInputService.InputBegan:Connect(function(inp,gpe)
-    if gpe then return end
-    if Config.ClickTP and inp.UserInputType==Enum.UserInputType.MouseButton2 then
-        local hrp=GetHRP()
-        if hrp then hrp.CFrame=CFrame.new(mouse.Hit.Position+Vector3.new(0,3,0)) end
-    end
-end)
-
-Players.PlayerAdded:Connect(function(p)
-    if Config.JoinLeaveLogger then
-        Notify("+ Joined",p.DisplayName)
-        if Config.WebhookEvents then SendWebhook("Joined",p.Name) end
-    end
-    p.Chatted:Connect(function(msg)
-        if Config.ChatLogger then
-            Notify(p.DisplayName,msg)
-            if Config.WebhookEvents then SendWebhook("Chat: "..p.Name,msg) end
-        end
-    end)
-end)
-Players.PlayerRemoving:Connect(function(p)
-    if Config.JoinLeaveLogger then
-        Notify("- Left",p.DisplayName)
-        if Config.WebhookEvents then SendWebhook("Left",p.Name) end
-    end
-end)
-
-lp.AncestryChanged:Connect(function()
-    if not lp:IsDescendantOf(game) and Config.WebhookSession then
-        SendWebhook("Session Report",
-            ("Player: %s\nTime: %ds\nFarm: %s\nKA: %s"):format(
-                lp.Name,os.time()-sessionStart,
-                tostring(Config.BossFarm or Config.MobFarm),
-                tostring(Config.KillAura)))
+    local mobs = GetAllMobs("All", Workspace)
+    local mobsP = GetAllMobs("All", Players)
+    for _, v in ipairs(mobsP) do table.insert(mobs, v) end
+    for _, mob in ipairs(mobs) do
+        if Config.MobESPTarget~="All" and not mob.model.Name:lower():find(Config.MobESPTarget:lower()) then continue end
+        local dist=myHRP and math.floor((mob.hrp.Position-myHRP.Position).Magnitude) or 0
+        UpdateESP(mob.hrp,Color3.fromRGB(255,165,0),mob.model.Name.."  "..dist.."m  "..math.floor(mob.hum.Health).."hp",mob.hum)
     end
 end)
 
@@ -1106,16 +779,14 @@ end)
 -- GUI
 -- ============================================================
 local gui=Instance.new("ScreenGui")
-gui.Name="StandOutSO"; gui.ResetOnSpawn=false; gui.IgnoreGuiInset=true
-gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+gui.Name="StandOutSO"; gui.ResetOnSpawn=false; gui.IgnoreGuiInset=true; gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
 pcall(function() gui.Parent=CoreGui end)
 if not gui.Parent then gui.Parent=lp.PlayerGui end
 
 local W,H=660,440
 local mf=Instance.new("Frame",gui)
 mf.Size=UDim2.new(0,W,0,H); mf.Position=UDim2.new(0.5,-W/2,0.5,-H/2)
-mf.BackgroundColor3=Color3.fromRGB(14,14,20); mf.BorderSizePixel=0
-mf.Active=true; mf.Draggable=true
+mf.BackgroundColor3=Color3.fromRGB(14,14,20); mf.BorderSizePixel=0; mf.Active=true; mf.Draggable=true
 Instance.new("UICorner",mf).CornerRadius=UDim.new(0,8)
 
 local tb=Instance.new("Frame",mf); tb.Size=UDim2.new(1,0,0,36)
@@ -1126,8 +797,7 @@ tbfix.Position=UDim2.new(0,0,0.5,0); tbfix.BackgroundColor3=Color3.fromRGB(220,4
 local ttl=Instance.new("TextLabel",tb)
 ttl.Size=UDim2.new(1,-80,1,0); ttl.Position=UDim2.new(0,12,0,0); ttl.BackgroundTransparency=1
 ttl.Text="⚡  STAND OUT  |  AR-AI  |  fraughting"
-ttl.TextColor3=Color3.new(1,1,1); ttl.Font=Enum.Font.GothamBold; ttl.TextSize=13
-ttl.TextXAlignment=Enum.TextXAlignment.Left
+ttl.TextColor3=Color3.new(1,1,1); ttl.Font=Enum.Font.GothamBold; ttl.TextSize=13; ttl.TextXAlignment=Enum.TextXAlignment.Left
 
 local function TopBtn(xoff,label,color,fn)
     local b=Instance.new("TextButton",tb)
@@ -1140,14 +810,11 @@ end
 TopBtn(-34,"✕",Color3.fromRGB(200,30,30),function() mf.Visible=false end)
 TopBtn(-66,"−",Color3.fromRGB(50,50,80),function()
     local cf=mf:FindFirstChild("Content")
-    if cf then cf.Visible=not cf.Visible
-        mf.Size=cf.Visible and UDim2.new(0,W,0,H) or UDim2.new(0,W,0,36)
-    end
+    if cf then cf.Visible=not cf.Visible; mf.Size=cf.Visible and UDim2.new(0,W,0,H) or UDim2.new(0,W,0,36) end
 end)
 
 local content=Instance.new("Frame",mf); content.Name="Content"
-content.Size=UDim2.new(1,0,1,-36); content.Position=UDim2.new(0,0,0,36)
-content.BackgroundTransparency=1
+content.Size=UDim2.new(1,0,1,-36); content.Position=UDim2.new(0,0,0,36); content.BackgroundTransparency=1
 
 local sidebar=Instance.new("Frame",content)
 sidebar.Size=UDim2.new(0,120,1,0); sidebar.BackgroundColor3=Color3.fromRGB(10,10,16); sidebar.BorderSizePixel=0
@@ -1161,14 +828,10 @@ local TabObjs={}
 
 local function SF(parent)
     local s=Instance.new("ScrollingFrame",parent)
-    s.Size=UDim2.new(1,0,1,0); s.BackgroundTransparency=1
-    s.ScrollBarThickness=3; s.ScrollBarImageColor3=Color3.fromRGB(220,40,40); s.BorderSizePixel=0
+    s.Size=UDim2.new(1,0,1,0); s.BackgroundTransparency=1; s.ScrollBarThickness=3; s.ScrollBarImageColor3=Color3.fromRGB(220,40,40); s.BorderSizePixel=0
     local ll=Instance.new("UIListLayout",s); ll.Padding=UDim.new(0,3)
-    ll:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-        s.CanvasSize=UDim2.new(0,0,0,ll.AbsoluteContentSize.Y+8)
-    end)
-    local pad=Instance.new("UIPadding",s)
-    pad.PaddingLeft=UDim.new(0,5); pad.PaddingRight=UDim.new(0,5); pad.PaddingTop=UDim.new(0,4)
+    ll:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() s.CanvasSize=UDim2.new(0,0,0,ll.AbsoluteContentSize.Y+8) end)
+    local pad=Instance.new("UIPadding",s); pad.PaddingLeft=UDim.new(0,5); pad.PaddingRight=UDim.new(0,5); pad.PaddingTop=UDim.new(0,4)
     return s
 end
 
@@ -1178,21 +841,17 @@ local function Toggle(parent,text,key,cb)
     Instance.new("UICorner",row).CornerRadius=UDim.new(0,5)
     local lbl=Instance.new("TextLabel",row)
     lbl.Size=UDim2.new(1,-52,1,0); lbl.Position=UDim2.new(0,8,0,0); lbl.BackgroundTransparency=1
-    lbl.Text=text; lbl.TextColor3=Color3.fromRGB(210,210,210); lbl.Font=Enum.Font.Gotham
-    lbl.TextSize=12; lbl.TextXAlignment=Enum.TextXAlignment.Left
+    lbl.Text=text; lbl.TextColor3=Color3.fromRGB(210,210,210); lbl.Font=Enum.Font.Gotham; lbl.TextSize=12; lbl.TextXAlignment=Enum.TextXAlignment.Left
     local btn=Instance.new("TextButton",row)
     btn.Size=UDim2.new(0,38,0,18); btn.Position=UDim2.new(1,-42,0.5,-9)
-    btn.BackgroundColor3=Config[key] and Color3.fromRGB(220,40,40) or Color3.fromRGB(45,45,65)
-    btn.Text=""; btn.BorderSizePixel=0
+    btn.BackgroundColor3=Config[key] and Color3.fromRGB(220,40,40) or Color3.fromRGB(45,45,65); btn.Text=""; btn.BorderSizePixel=0
     Instance.new("UICorner",btn).CornerRadius=UDim.new(0,9)
     local knob=Instance.new("Frame",btn)
-    knob.Size=UDim2.new(0,14,0,14)
-    knob.Position=Config[key] and UDim2.new(1,-16,0.5,-7) or UDim2.new(0,2,0.5,-7)
+    knob.Size=UDim2.new(0,14,0,14); knob.Position=Config[key] and UDim2.new(1,-16,0.5,-7) or UDim2.new(0,2,0.5,-7)
     knob.BackgroundColor3=Color3.new(1,1,1); knob.BorderSizePixel=0
     Instance.new("UICorner",knob).CornerRadius=UDim.new(1,0)
     btn.MouseButton1Click:Connect(function()
-        Config[key]=not Config[key]
-        btn.BackgroundColor3=Config[key] and Color3.fromRGB(220,40,40) or Color3.fromRGB(45,45,65)
+        Config[key]=not Config[key]; btn.BackgroundColor3=Config[key] and Color3.fromRGB(220,40,40) or Color3.fromRGB(45,45,65)
         knob.Position=Config[key] and UDim2.new(1,-16,0.5,-7) or UDim2.new(0,2,0.5,-7)
         if cb then cb(Config[key]) end
     end)
@@ -1204,15 +863,12 @@ local function Slider(parent,text,key,mn,mx)
     Instance.new("UICorner",row).CornerRadius=UDim.new(0,5)
     local lbl=Instance.new("TextLabel",row)
     lbl.Size=UDim2.new(1,0,0,17); lbl.Position=UDim2.new(0,8,0,2); lbl.BackgroundTransparency=1
-    lbl.Text=text..": "..tostring(Config[key]); lbl.TextColor3=Color3.fromRGB(190,190,190)
-    lbl.Font=Enum.Font.Gotham; lbl.TextSize=11; lbl.TextXAlignment=Enum.TextXAlignment.Left
+    lbl.Text=text..": "..tostring(Config[key]); lbl.TextColor3=Color3.fromRGB(190,190,190); lbl.Font=Enum.Font.Gotham; lbl.TextSize=11; lbl.TextXAlignment=Enum.TextXAlignment.Left
     local track=Instance.new("Frame",row)
-    track.Size=UDim2.new(1,-16,0,5); track.Position=UDim2.new(0,8,0,25)
-    track.BackgroundColor3=Color3.fromRGB(45,45,65); track.BorderSizePixel=0
+    track.Size=UDim2.new(1,-16,0,5); track.Position=UDim2.new(0,8,0,25); track.BackgroundColor3=Color3.fromRGB(45,45,65); track.BorderSizePixel=0
     Instance.new("UICorner",track).CornerRadius=UDim.new(1,0)
     local fill=Instance.new("Frame",track)
-    fill.BackgroundColor3=Color3.fromRGB(220,40,40); fill.BorderSizePixel=0
-    fill.Size=UDim2.new((Config[key]-mn)/(mx-mn),0,1,0)
+    fill.BackgroundColor3=Color3.fromRGB(220,40,40); fill.BorderSizePixel=0; fill.Size=UDim2.new((Config[key]-mn)/(mx-mn),0,1,0)
     Instance.new("UICorner",fill).CornerRadius=UDim.new(1,0)
     local drag=false
     track.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=true end end)
@@ -1220,16 +876,14 @@ local function Slider(parent,text,key,mn,mx)
     RunService.RenderStepped:Connect(function()
         if not drag then return end
         local r=math.clamp((mouse.X-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)
-        local v=math.floor(mn+r*(mx-mn))
-        Config[key]=v; fill.Size=UDim2.new(r,0,1,0); lbl.Text=text..": "..v
+        local v=math.floor(mn+r*(mx-mn)); Config[key]=v; fill.Size=UDim2.new(r,0,1,0); lbl.Text=text..": "..v
     end)
 end
 
 local function Btn(parent,text,fn)
     local b=Instance.new("TextButton",parent)
-    b.Size=UDim2.new(1,-2,0,27); b.BackgroundColor3=Color3.fromRGB(220,40,40)
-    b.Text=text; b.TextColor3=Color3.new(1,1,1); b.Font=Enum.Font.GothamBold
-    b.TextSize=12; b.BorderSizePixel=0
+    b.Size=UDim2.new(1,-2,0,27); b.BackgroundColor3=Color3.fromRGB(220,40,40); b.Text=text; b.TextColor3=Color3.new(1,1,1)
+    b.Font=Enum.Font.GothamBold; b.TextSize=12; b.BorderSizePixel=0
     Instance.new("UICorner",b).CornerRadius=UDim.new(0,5)
     b.MouseButton1Click:Connect(fn)
 end
@@ -1240,13 +894,11 @@ local function Input(parent,text,key)
     Instance.new("UICorner",row).CornerRadius=UDim.new(0,5)
     local lbl=Instance.new("TextLabel",row)
     lbl.Size=UDim2.new(1,0,0,17); lbl.Position=UDim2.new(0,8,0,2); lbl.BackgroundTransparency=1
-    lbl.Text=text; lbl.TextColor3=Color3.fromRGB(190,190,190); lbl.Font=Enum.Font.Gotham
-    lbl.TextSize=11; lbl.TextXAlignment=Enum.TextXAlignment.Left
+    lbl.Text=text; lbl.TextColor3=Color3.fromRGB(190,190,190); lbl.Font=Enum.Font.Gotham; lbl.TextSize=11; lbl.TextXAlignment=Enum.TextXAlignment.Left
     local box=Instance.new("TextBox",row)
-    box.Size=UDim2.new(1,-16,0,17); box.Position=UDim2.new(0,8,0,21)
-    box.BackgroundColor3=Color3.fromRGB(32,32,48); box.Text=tostring(Config[key] or "")
-    box.TextColor3=Color3.new(1,1,1); box.Font=Enum.Font.Gotham; box.TextSize=11
-    box.BorderSizePixel=0; box.PlaceholderText="..."; box.PlaceholderColor3=Color3.fromRGB(90,90,110)
+    box.Size=UDim2.new(1,-16,0,17); box.Position=UDim2.new(0,8,0,21); box.BackgroundColor3=Color3.fromRGB(32,32,48); box.Text=tostring(Config[key] or "")
+    box.TextColor3=Color3.new(1,1,1); box.Font=Enum.Font.Gotham; box.TextSize=11; box.BorderSizePixel=0
+    box.PlaceholderText="..."; box.PlaceholderColor3=Color3.fromRGB(90,90,110)
     Instance.new("UICorner",box).CornerRadius=UDim.new(0,4)
     box.FocusLost:Connect(function() Config[key]=box.Text end)
 end
@@ -1254,19 +906,12 @@ end
 for i,name in ipairs(TABS) do
     local sf=SF(ta); sf.Name=name; sf.Visible=false
     local tbtn=Instance.new("TextButton",sidebar)
-    tbtn.Size=UDim2.new(1,0,0,34); tbtn.BackgroundColor3=Color3.fromRGB(10,10,16)
-    tbtn.Text=name; tbtn.TextColor3=Color3.fromRGB(160,160,160)
-    tbtn.Font=Enum.Font.Gotham; tbtn.TextSize=12; tbtn.BorderSizePixel=0; tbtn.LayoutOrder=i
+    tbtn.Size=UDim2.new(1,0,0,34); tbtn.BackgroundColor3=Color3.fromRGB(10,10,16); tbtn.Text=name
+    tbtn.TextColor3=Color3.fromRGB(160,160,160); tbtn.Font=Enum.Font.Gotham; tbtn.TextSize=12; tbtn.BorderSizePixel=0; tbtn.LayoutOrder=i
     TabObjs[name]={btn=tbtn,sf=sf}
     tbtn.MouseButton1Click:Connect(function()
-        for _,t in pairs(TabObjs) do
-            t.sf.Visible=false
-            t.btn.BackgroundColor3=Color3.fromRGB(10,10,16)
-            t.btn.TextColor3=Color3.fromRGB(160,160,160)
-        end
-        sf.Visible=true
-        tbtn.BackgroundColor3=Color3.fromRGB(220,40,40)
-        tbtn.TextColor3=Color3.new(1,1,1)
+        for _,t in pairs(TabObjs) do t.sf.Visible=false; t.btn.BackgroundColor3=Color3.fromRGB(10,10,16); t.btn.TextColor3=Color3.fromRGB(160,160,160) end
+        sf.Visible=true; tbtn.BackgroundColor3=Color3.fromRGB(220,40,40); tbtn.TextColor3=Color3.new(1,1,1)
     end)
 end
 
@@ -1287,10 +932,7 @@ Toggle(F,"Auto Roll","AutoRoll")
 Input(F,"Arrow Type","ArrowType")
 Toggle(F,"Keep Legendary+","KeepLegendaryPlus")
 Slider(F,"Back Off HP %","BackOffHP",1,99)
-Btn(F,"Set Farm Position Here",function()
-    local hrp=GetHRP()
-    if hrp then Config.FarmPosition=hrp.Position; Notify("Farm Pos","Set!") end
-end)
+Btn(F,"Set Farm Position Here",function() local hrp=GetHRP(); if hrp then Config.FarmPosition=hrp.Position; Notify("Farm Pos","Set!") end end)
 
 local C=TabObjs["Combat"].sf
 Toggle(C,"Kill Aura","KillAura")
@@ -1342,37 +984,21 @@ local V=TabObjs["Visual"].sf
 Toggle(V,"Fullbright","Fullbright")
 Toggle(V,"No Fog","NoFog")
 Toggle(V,"No Atmosphere","NoAtmosphere",function(on)
-    for _,v in ipairs(Lighting:GetChildren()) do
-        if v:IsA("Atmosphere") then v.Density=on and 0 or 0.395 end
-    end
+    for _,v in ipairs(Lighting:GetChildren()) do if v:IsA("Atmosphere") then v.Density=on and 0 or 0.395 end end
 end)
 Toggle(V,"No Shadows","NoShadows")
 Toggle(V,"X-Ray","XRay",function(on)
     for _,v in ipairs(Workspace:GetDescendants()) do
-        if v:IsA("BasePart") and not (lp.Character and v:IsDescendantOf(lp.Character)) then
-            v.Material=on and Enum.Material.ForceField or Enum.Material.SmoothPlastic
-        end
+        if v:IsA("BasePart") and not (lp.Character and v:IsDescendantOf(lp.Character)) then v.Material=on and Enum.Material.ForceField or Enum.Material.SmoothPlastic end
     end
 end)
 Slider(V,"Custom FOV","CustomFOV",30,120)
 Toggle(V,"Infinite Zoom","InfiniteZoom")
-Toggle(V,"Force 3rd Person","Force3rdPerson",function(on)
-    cam.CameraType=on and Enum.CameraType.Follow or Enum.CameraType.Custom
-end)
+Toggle(V,"Force 3rd Person","Force3rdPerson",function(on) cam.CameraType=on and Enum.CameraType.Follow or Enum.CameraType.Custom end)
 Toggle(V,"Nuke Effects","NukeEffects",function(on)
     if on then
         for _,v in ipairs(Workspace:GetDescendants()) do
-            if v:IsA("ParticleEmitter") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then
-                v.Enabled=false
-            end
-        end
-    end
-end)
-Toggle(V,"Potato Mode","PotatoMode",function(on)
-    if on then
-        Lighting.GlobalShadows=false
-        for _,v in ipairs(Workspace:GetDescendants()) do
-            if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Beam") then v.Enabled=false end
+            if v:IsA("ParticleEmitter") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then v.Enabled=false end
         end
     end
 end)
@@ -1381,29 +1007,16 @@ local T=TabObjs["Teleport"].sf
 Input(T,"Area Name","AreaTPName")
 Btn(T,"Go to Area",function()
     local obj=Workspace:FindFirstChild(Config.AreaTPName,true)
-    if obj then
-        local pos=obj:IsA("Model") and obj.PrimaryPart and obj.PrimaryPart.Position
-            or (obj:IsA("BasePart") and obj.Position)
-        if pos then TPTo(pos,5) end
+    if obj then local pos=obj:IsA("Model") and obj.PrimaryPart and obj.PrimaryPart.Position or (obj:IsA("BasePart") and obj.Position); if pos then TPTo(pos,5) end
     else Notify("TP","Not found: "..Config.AreaTPName) end
 end)
 Input(T,"NPC Name","NPCTeleportName")
 Btn(T,"TP to NPC",function()
     local npc=FindNPC(Config.NPCTeleportName)
-    if npc then
-        local nhrp=npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart
-        if nhrp then TPTo(nhrp.Position,3) end
+    if npc then local nhrp=npc:FindFirstChild("HumanoidRootPart") or npc.PrimaryPart; if nhrp then TPTo(nhrp.Position,3) end
     else Notify("TP","NPC not found: "..Config.NPCTeleportName) end
 end)
 Toggle(T,"Click TP (RMB)","ClickTP")
-Btn(T,"Copy Position",function()
-    local hrp=GetHRP()
-    if hrp then
-        local p=hrp.Position
-        setclipboard(("Vector3.new(%.2f, %.2f, %.2f)"):format(p.X,p.Y,p.Z))
-        Notify("Copied",tostring(p))
-    end
-end)
 
 local SV=TabObjs["Server"].sf
 Toggle(SV,"Join/Leave Logger","JoinLeaveLogger")
@@ -1413,30 +1026,21 @@ Slider(SV,"Alert Range","NearbyAlertRange",10,200)
 Toggle(SV,"Auto Rejoin","AutoRejoin")
 Btn(SV,"Server Hop",ServerHop)
 Btn(SV,"Rejoin",function() TeleportService:Teleport(game.PlaceId) end)
-Btn(SV,"Copy Job ID",function()
-    setclipboard(game.JobId); Notify("Copied","Job ID: "..game.JobId)
-end)
 
 local WH=TabObjs["Webhook"].sf
 Input(WH,"Webhook URL","WebhookURL")
 Toggle(WH,"Event Posts","WebhookEvents")
 Toggle(WH,"Session Reports","WebhookSession")
 Btn(WH,"Test Webhook",function()
-    if Config.WebhookURL~="" then
-        SendWebhook("Test","Script online. Player: "..lp.Name)
-        Notify("Webhook","Sent.")
+    if Config.WebhookURL~="" then SendWebhook("Test","Script online. Player: "..lp.Name); Notify("Webhook","Sent.")
     else Notify("Webhook","No URL set.") end
 end)
 
 UserInputService.InputBegan:Connect(function(inp,gpe)
     if gpe then return end
-    if inp.KeyCode==Enum.KeyCode.Insert or inp.KeyCode==Enum.KeyCode.Delete then
-        mf.Visible=not mf.Visible
-    end
+    if inp.KeyCode==Enum.KeyCode.Insert or inp.KeyCode==Enum.KeyCode.Delete then mf.Visible=not mf.Visible end
 end)
 
 local activeQ=GetActiveQuest() or "none"
 Notify("Stand Out Script","Loaded! Active quest: "..activeQ)
 print("[AR-AI] Stand Out Final — fraughting illgeallycrime Ar0")
-print("Stand: "..(lp:FindFirstChild("Data") and lp.Data.Stand and lp.Data.Stand.Value or "?"))
-print("Active quest: "..activeQ)
