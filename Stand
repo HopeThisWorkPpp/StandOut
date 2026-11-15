@@ -248,21 +248,17 @@ end
 
 -- ============================================================
 -- VAULT PROXIMITY PROMPT HELPER
--- Teleports to Rohan House FIRST, waits for stream, then fires prompt.
--- Active quest objective is Interact_RohanVault; vault is a ProximityPrompt:
--- Workspace.Game.Map.RohanHouse.Vault.RohanVaultPromptAttachment.RohanVaultPrompt
+-- Uses full InputHoldBegin / InputHoldEnd sequence to simulate 4.5s hold
 -- ============================================================
 local VAULT_COORDS = Vector3.new(2181.66, 27.55, 1502.78)
 
 local function FireVaultPrompt()
-    -- STEP 1: Teleport unconditionally, before any lookup
+    -- 1. Teleport first, unconditionally
     Notify("Vault", "Teleporting to Rohan House...")
     TPTo(VAULT_COORDS, 3)
+    task.wait(2.5) -- wait for stream
 
-    -- STEP 2: Wait for the area to stream in
-    task.wait(2.5)
-
-    -- STEP 3: Find the prompt by name (path-independent)
+    -- 2. Find the prompt
     local pp = nil
     for _, v in ipairs(Workspace:GetDescendants()) do
         if v:IsA("ProximityPrompt") and v.Name == "RohanVaultPrompt" then
@@ -272,28 +268,32 @@ local function FireVaultPrompt()
     end
 
     if not pp then
-        Notify("Vault", "RohanVaultPrompt not found after TP")
+        Notify("Vault", "Prompt not found after TP")
         return false
     end
 
-    -- STEP 4: TP precisely onto the vault so we're in activation range
+    -- 3. TP precisely onto the vault so we are within MaxActivationDistance
     local vaultModel = pp.Parent and pp.Parent.Parent
     if vaultModel and vaultModel.PrimaryPart then
         TPTo(vaultModel.PrimaryPart.Position, 2)
-        task.wait(0.4)
+        task.wait(0.5)
     end
 
-    -- STEP 5: Fire the prompt (Crack Open, HoldDuration 4.5)
-    local fired = pcall(function() fireproximityprompt(pp) end)
-    if not fired then
-        pcall(function()
-            pp:InputHoldBegin()
-            task.wait(pp.HoldDuration + 0.1)
-            pp:InputHoldEnd()
-        end)
+    -- 4. Hold the prompt properly
+    Notify("Vault", "Holding prompt...")
+    local holdSuccess = pcall(function()
+        pp:InputHoldBegin()
+        task.wait(pp.HoldDuration + 0.5) -- Wait 4.5s + buffer
+        pp:InputHoldEnd()
+    end)
+
+    -- 5. Fallback if InputHold doesn't work (try executor's fireproximityprompt)
+    if not holdSuccess then
+        pcall(function() fireproximityprompt(pp) end)
     end
 
-    Notify("Vault", "Crack Open fired!")
+    Notify("Vault", "Hold sequence complete!")
+    task.wait(1)
     return true
 end
 
