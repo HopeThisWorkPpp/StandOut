@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Adaptive Quest Engine v4)
+-- [AR-AI] Stand Out — Full Script (Vault Sequence Fix)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -262,11 +262,13 @@ local function HoldPrompt(promptName)
     end
     if not pp then return false end
 
-    local model = pp.Parent and pp.Parent.Parent
-    if model and model.PrimaryPart then
-        TPTo(model.PrimaryPart.Position, 2)
-        WaitFor(0.5)
+    local model = pp.Parent and pp.Parent.PrimaryPart
+    if model then
+        TPTo(model.Position, 2)
+    else
+        TPTo(pp.Parent.Position, 2) 
     end
+    WaitFor(0.5)
 
     Notify("Quest", "Holding "..promptName.."...")
     pcall(function()
@@ -280,7 +282,7 @@ local function HoldPrompt(promptName)
 end
 
 -- ============================================================
--- ADAPTIVE QUEST LOOP (Fixed to execute every time)
+-- ADAPTIVE QUEST LOOP
 -- ============================================================
 coroutine.wrap(function()
     while true do
@@ -301,10 +303,11 @@ coroutine.wrap(function()
             print("[AI] Active: " .. active .. " | Target: Loading...")
         end
 
-        -- 1. Rohan Vault Story
+        -- 1. Rohan Vault Story (Two Vaults)
         if active == "P9_03_STEAL_FROM_ROHAN_VAULT" then
             if objectives and objectives["Interact_RohanVault"] then
-                Notify("Vault", "Teleporting to Vault...")
+                -- Stage 1: Open the first vault door
+                Notify("Vault", "Teleporting to Vault (1st Door)...")
                 TPTo(Vector3.new(2181.66, 27.55, 1502.78), 3)
                 task.wait(2.5)
                 
@@ -312,8 +315,8 @@ coroutine.wrap(function()
                     HoldPrompt("SecretBookshelfPrompt") 
                 end
             else
-                -- Door is open. Teleport to vault, then look for diamond.
-                Notify("Vault", "Door open. Teleporting to Vault to find diamond...")
+                -- Stage 2: Door 1 is open, objective is now to pick up the diamond (which requires opening the secret bookshelf)
+                Notify("Vault", "Looking for Diamond...")
                 TPTo(Vector3.new(2181.66, 27.55, 1502.78), 3)
                 task.wait(2.5)
 
@@ -327,8 +330,16 @@ coroutine.wrap(function()
                         pcall(function() Rem.Item:FireServer("Collect", diamond) end)
                     end
                 else
-                    -- Fallback if diamond model name is different, TP inside vault
-                    TPTo(Vector3.new(2181.66, 27.55, 1502.78), 2)
+                    -- If we don't see the diamond, we must need to open the second vault (SecretBookshelf)
+                    Notify("Vault", "Opening secret bookshelf...")
+                    HoldPrompt("SecretBookshelfPrompt")
+                    task.wait(2) 
+                    -- Try finding the diamond again after opening
+                    local diamond2 = FindPartByName("Diamond") or FindPartByName("RohanDiamond")
+                    if diamond2 then
+                        local pos2 = diamond2:IsA("Model") and diamond2.PrimaryPart and diamond2.PrimaryPart.Position or diamond2.Position
+                        if pos2 then TPTo(pos2, 2); pcall(function() Rem.Item:FireServer("Collect", diamond2) end) end
+                    end
                 end
             end
 
