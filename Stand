@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Brute-Force Hold)
+-- [AR-AI] Stand Out — Full Script (Strict Prompt Hold)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -252,44 +252,29 @@ local function SimInteract(partName)
     WaitFor(0.3)
 end
 
--- Brute-force find and hold any prompt in the vault
-local function BruteForceHold()
-    local hrp = GetHRP()
-    if not hrp then return end
-    
-    local nearestPrompt, nearestDist = nil, math.huge
-    
+local function HoldSpecificPrompt(promptNames)
+    local foundPrompt = nil
     for _, v in ipairs(Workspace:GetDescendants()) do
         if v:IsA("ProximityPrompt") and v.Enabled then
-            local promptPos
-            if v.Parent and v.Parent:IsA("BasePart") then
-                promptPos = v.Parent.Position
-            elseif v.Parent and v.Parent:IsA("Model") and v.Parent.PrimaryPart then
-                promptPos = v.Parent.PrimaryPart.Position
-            elseif v.Parent and v.Parent.Parent and v.Parent.Parent:IsA("Model") and v.Parent.Parent.PrimaryPart then
-                promptPos = v.Parent.Parent.PrimaryPart.Position
-            end
-            
-            if promptPos then
-                local d = (promptPos - hrp.Position).Magnitude
-                if d < nearestDist then
-                    nearestDist = d
-                    nearestPrompt = v
+            for _, name in ipairs(promptNames) do
+                if v.Name == name or v.Name:lower():find(name:lower()) then
+                    foundPrompt = v
+                    break
                 end
             end
+            if foundPrompt then break end
         end
     end
 
-    if nearestPrompt then
-        Notify("Vault", "Holding "..nearestPrompt.Name.."...")
-        
+    if foundPrompt then
+        Notify("Vault", "Holding "..foundPrompt.Name.."...")
         local targetPos
-        if nearestPrompt.Parent and nearestPrompt.Parent:IsA("BasePart") then
-            targetPos = nearestPrompt.Parent.Position
-        elseif nearestPrompt.Parent and nearestPrompt.Parent:IsA("Model") and nearestPrompt.Parent.PrimaryPart then
-            targetPos = nearestPrompt.Parent.PrimaryPart.Position
-        elseif nearestPrompt.Parent and nearestPrompt.Parent.Parent and nearestPrompt.Parent.Parent:IsA("Model") and nearestPrompt.Parent.Parent.PrimaryPart then
-            targetPos = nearestPrompt.Parent.Parent.PrimaryPart.Position
+        if foundPrompt.Parent and foundPrompt.Parent:IsA("BasePart") then
+            targetPos = foundPrompt.Parent.Position
+        elseif foundPrompt.Parent and foundPrompt.Parent:IsA("Model") and foundPrompt.Parent.PrimaryPart then
+            targetPos = foundPrompt.Parent.PrimaryPart.Position
+        elseif foundPrompt.Parent and foundPrompt.Parent.Parent and foundPrompt.Parent.Parent:IsA("Model") and foundPrompt.Parent.Parent.PrimaryPart then
+            targetPos = foundPrompt.Parent.Parent.PrimaryPart.Position
         end
 
         if targetPos then
@@ -298,13 +283,15 @@ local function BruteForceHold()
         end
 
         pcall(function()
-            nearestPrompt:InputHoldBegin()
-            task.wait(nearestPrompt.HoldDuration + 0.5)
-            nearestPrompt:InputHoldEnd()
+            foundPrompt:InputHoldBegin()
+            task.wait(foundPrompt.HoldDuration + 0.5)
+            foundPrompt:InputHoldEnd()
         end)
         Notify("Vault", "Hold complete.")
-        WaitFor(1.5)
+        WaitFor(1)
+        return true
     end
+    return false
 end
 
 -- ============================================================
@@ -328,29 +315,32 @@ coroutine.wrap(function()
             print("[AI] Active: " .. active .. " | Target: Loading...")
         end
 
-        -- 1. Rohan Vault Story (Brute-force Hold)
+        -- 1. Rohan Vault Story (Strict Prompt Hold)
         if active == "P9_03_STEAL_FROM_ROHAN_VAULT" then
             if objectives and objectives["Interact_RohanVault"] then
-                -- Teleport to Vault, then spam hold whatever is there
+                -- Stage 1: Open the first vault door
+                Notify("Vault", "Opening 1st Door...")
                 TPTo(Vector3.new(2181.66, 27.55, 1502.78), 3)
-                task.wait(2)
-                BruteForceHold()
+                task.wait(3)
+                HoldSpecificPrompt({"RohanVaultPrompt"})
             else
-                -- If we have the diamond, objective is done. If not, keep brute-forcing inside
+                -- Stage 2: Pick up diamond OR open bookshelf
+                Notify("Vault", "Looking for Diamond / Bookshelf...")
+                TPTo(Vector3.new(2181.66, 27.55, 1502.78), 3)
+                task.wait(2.5)
+
                 local diamond = FindPartByName("Diamond") or FindPartByName("RohanDiamond")
                 if diamond then
                     local pos = diamond:IsA("Model") and diamond.PrimaryPart and diamond.PrimaryPart.Position or diamond.Position
                     if pos then 
-                        Notify("Vault", "Diamond found! Collecting...")
+                        Notify("Vault", "Diamond found! Holding to collect...")
                         TPTo(pos, 2) 
                         WaitFor(0.5)
-                        pcall(function() Rem.Item:FireServer("Collect", diamond) end)
+                        HoldSpecificPrompt({"DiamondPrompt", "Prompt"})
                     end
                 else
-                    -- We need to open the secret bookshelf to spawn the diamond
-                    TPTo(Vector3.new(2181.66, 27.55, 1502.78), 3)
-                    task.wait(1)
-                    BruteForceHold()
+                    -- Open the secret bookshelf
+                    HoldSpecificPrompt({"SecretBookshelfPrompt"})
                 end
             end
 
