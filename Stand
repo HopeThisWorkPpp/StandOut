@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Remote Attack Engine)
+-- [AR-AI] Stand Out — Full Script (Fixed Quest Tracking + No Flinging)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -15,6 +15,9 @@ local Lighting   = game:GetService("Lighting")
 local lp  = Players.LocalPlayer
 local cam = Workspace.CurrentCamera
 local mouse = lp:GetMouse()
+
+-- Global flag to stop Kill Aura / Mob Farm during quests
+local isQuesting = false
 
 -- ============================================================
 -- REMOTES (Safe Load + Auto Clipboard)
@@ -65,7 +68,6 @@ local Rem = {
     AfkRejoin         = getRemote(R, "AfkRejoin"),
 }
 
--- Safe MousePos Load
 local function SafeGetMouseRemote()
     local ok, result = pcall(function()
         return ReplicatedStorage
@@ -186,16 +188,11 @@ local function FindNPC(name)
 end
 
 -- ============================================================
--- ATTACK ENGINE (Direct Remote Fire - No Key Simulation)
+-- ATTACK ENGINE (Direct Remote Fire)
 -- ============================================================
 local function FireAttack(targetModel)
-    -- 1. Force Stand to equip (prevents unequipping)
     pcall(function() Rem.Standify:FireServer(true) end)
-    
-    -- 2. Fire Swing animation
     pcall(function() Rem.Combat:FireServer("Swing") end)
-    
-    -- 3. Hit the target explicitly
     if targetModel then
         pcall(function() 
             Rem.Combat:FireServer("Hit Character", targetModel.Name, 1, 1, nil, false, nil, false, false, false, 1) 
@@ -203,15 +200,8 @@ local function FireAttack(targetModel)
     end
 end
 
-local function FaceTarget(targetHRP)
-    local hrp = GetHRP()
-    if not hrp or not targetHRP then return end
-    local dir = (targetHRP.Position - hrp.Position).Unit
-    hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + Vector3.new(dir.X, 0, dir.Z))
-end
-
 -- ============================================================
--- UNIVERSAL MOB SEARCH (Workspace + Players folder)
+-- UNIVERSAL MOB SEARCH
 -- ============================================================
 local function GetAllMobs(tag, root)
     local hrp = GetHRP()
@@ -348,10 +338,16 @@ end
 coroutine.wrap(function()
     while true do
         task.wait(1)
-        if not Config.StoryFarm then continue end
+        if not Config.StoryFarm then 
+            isQuesting = false
+            continue 
+        end
 
         local active = GetActiveQuest()
-        if not active then continue end
+        if not active then 
+            isQuesting = false
+            continue 
+        end
         
         local objectives = GetQuestObjectives()
         
@@ -365,6 +361,7 @@ coroutine.wrap(function()
 
         -- 1. Rohan Vault Story
         if active == "P9_03_STEAL_FROM_ROHAN_VAULT" then
+            isQuesting = false
             Notify("Vault","Step 1: Pulling bookshelf...")
             local bookshelf
             for _, v in ipairs(Workspace:GetDescendants()) do
@@ -440,90 +437,97 @@ coroutine.wrap(function()
 
         -- 2. Escaping Rohan House
         elseif active == "P9_04_ESCAPE_ROHAN_HOUSE" then
+            isQuesting = false
             Notify("Auto Quest", "Escaping Rohan House...")
             TPTo(Vector3.new(1556.39,33.47,1529.06), 3)
             WaitFor(0.8)
             pcall(function() Rem.Quest:FireServer("Zone","EscapeExit") end)
             task.wait(3)
 
-        -- Universal kill quest handler
+        -- 3. Universal Kill Quest Handler
         elseif active:lower():find("fight") or active:lower():find("defeat") or active:lower():find("kill") then
-            -- parse target name from objectives
-            local obj = GetQuestObjectives()
-            local targetName = "All"
-            if obj then
-                for k, _ in pairs(obj) do
-                    local stripped = k:gsub("^[Dd]efeat%s+", ""):gsub("^[Kk]ill%s+", "")
-                    if stripped ~= "" then targetName = stripped end
-                end
-            end
-            print("[AR-AI] Kill quest target resolved: '" .. targetName .. "'")
-            Notify("Quest", "Hunting: " .. targetName)
-
-            local killed = 0
-            local needed = 3
-
-            for attempt = 1, 40 do
-                local function findTargets(root)
-                    for _, v in ipairs(root:GetDescendants()) do
-                        if v:IsA("Model") and v ~= lp.Character then
-                            local isPlayer = false
-                            for _, p in ipairs(Players:GetPlayers()) do
-                                if p.Character == v then isPlayer = true; break end
-                            end
-                            if isPlayer then continue end
-
-                            local h = v:FindFirstChildOfClass("Humanoid")
-                            local vr = v:FindFirstChild("HumanoidRootPart")
-                            if h and h.Health > 0 and vr then
-                                local nameMatch = targetName == "All"
-                                    or v.Name:lower():find(targetName:lower())
-                                    or targetName:lower():find(v.Name:lower():gsub("_%d+$", ""))
-                                if nameMatch then
-                                    local hrp = GetHRP()
-                                    if hrp then
-                                        hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0, 2, 0), vr.Position)
-                                        task.wait(0.08)
-                                    end
-                                    if Rem.MousePos then
-                                        pcall(function() Rem.MousePos:FireServer(vr.Position) end)
-                                    end
-                                    
-                                    -- Use Remote Attack Engine
-                                    FireAttack(v)
-                                    
-                                    h.Health = 0
-                                    pcall(function() h:TakeDamage(99999) end)
-                                    killed = killed + 1
-                                    Notify("Quest", "Killed " .. killed)
-                                    print("[AR-AI] Killed: " .. v.Name .. " (" .. killed .. ")")
-                                    task.wait(0.4)
-                                end
-                            end
+            isQuesting = true
+            Notify("Quest", "Starting Kill Quest...")
+            
+            local function GetQuestProgress()
+                local obj = GetQuestObjectives()
+                if obj then
+                    for k, v in pairs(obj) do
+                        if k:lower():find("defeat") or k:lower():find("kill") or k:lower():find("fight") then
+                            return tonumber(v) or 0, k:gsub("^[Dd]efeat%s+", ""):gsub("^[Kk]ill%s+", ""):gsub("^[Ff]ight%s+", "")
                         end
                     end
                 end
-
-                findTargets(Workspace)
-                findTargets(Players)
-                task.wait(0.8)
+                return 0, "Wild Cat Size" -- fallback
             end
 
-            Notify("Quest", "Kill quest done — " .. killed .. " killed.")
+            local currentCount, targetName = GetQuestProgress()
+            print("Current progress: ", currentCount, "/3 for ", targetName)
+            
+            while currentCount < 3 do
+                if not Config.StoryFarm then break end
+                currentCount, targetName = GetQuestProgress()
+                if currentCount >= 3 then break end
+                
+                local mob = GetNearestMob(targetName)
+                if mob then
+                    local h = mob:FindFirstChildOfClass("Humanoid")
+                    local hrp = mob:FindFirstChild("HumanoidRootPart")
+                    
+                    if h and h.Health > 0 and hrp then
+                        local myHrp = GetHRP()
+                        if myHrp then
+                            -- TP safely to the mob
+                            myHrp.CFrame = CFrame.new(hrp.Position + Vector3.new(0, 2, 0), hrp.Position)
+                            task.wait(0.1)
+                            
+                            -- Fire attacks
+                            pcall(function() Rem.MousePos:FireServer(hrp.Position) end)
+                            pcall(function() Rem.Combat:FireServer("Swing") end)
+                            pcall(function() Rem.Combat:FireServer("Hit Character", mob.Name, 1, 1, nil, false, nil, false, false, false, 1) end)
+                            
+                            -- Wait for server to register the damage and quest progress
+                            task.wait(1.5)
+                            
+                            -- If still alive, fire again
+                            if h.Health > 0 then
+                                pcall(function() Rem.Combat:FireServer("Hit Character", mob.Name, 1, 1, nil, false, nil, false, false, false, 1) end)
+                                task.wait(1)
+                            end
+                            
+                            -- Local visual kill if server is lagging (optional, but helps visually)
+                            if h.Health > 0 then
+                                h.Health = 0
+                            end
+                        end
+                    end
+                else
+                    print("No mob found matching: ", targetName)
+                    task.wait(1)
+                end
+            end
+            Notify("Quest", "Kill quest done!")
+            isQuesting = false
             task.wait(3)
 
-        -- 3. Other Story Nodes
+        -- 4. Other Story Nodes
         elseif active == "P9_02_LOCATE_ROHAN_HOUSE" or active == "P9_02B_LOCATE_HIDDEN_VAULT" then
+            isQuesting = false
             TPTo(Vector3.new(2181.66,27.55,1502.78), 3); WaitFor(1.5); TalkNPC("Rohan Kishibe")
         elseif active == "P9_01_MEET_MERYL" then
+            isQuesting = false
             TalkNPC("Meryl Mei Qi")
         elseif active == "P9_01B_TAKE_HUBER" then
+            isQuesting = false
             TalkNPC("Meryl Mei Qi"); WaitFor(0.3); SimInteract("DiamotchFloorWatch")
         elseif active == "TUTORIAL_MEET_JODIO" then
+            isQuesting = false
             TalkNPC("TutorialJodio")
         elseif active == "TUTORIAL_FIND_ARROW" then
+            isQuesting = false
             SimInteract("TutorialArrowSand")
         elseif active == "DEFEAT_AGENT" then
+            isQuesting = true
             local agent = FindNPC("AlyoshaDichter")
             if agent then
                 local ahrp=agent:FindFirstChild("HumanoidRootPart")
@@ -536,6 +540,7 @@ coroutine.wrap(function()
                     end
                 end
             end
+            isQuesting = false
         end
     end
 end)()
@@ -594,10 +599,11 @@ coroutine.wrap(function()
 end)()
 
 -- ============================================================
--- KILL AURA — TP on top + direct remote fire
+-- KILL AURA
 -- ============================================================
 local kaLast = 0
 RunService.Heartbeat:Connect(function()
+    if isQuesting then return end -- Don't fling while questing
     if not Config.KillAura then return end
     if os.clock() - kaLast < 0.12 then return end
     kaLast = os.clock()
@@ -614,7 +620,6 @@ RunService.Heartbeat:Connect(function()
         if mob.dist > Config.KillAuraRange then break end
 
         task.spawn(function()
-            -- TP directly on top of mob and face it
             hrp.CFrame = CFrame.new(
                 mob.hrp.Position + Vector3.new(0, 2, 0),
                 mob.hrp.Position
@@ -625,7 +630,6 @@ RunService.Heartbeat:Connect(function()
                 pcall(function() Rem.MousePos:FireServer(mob.hrp.Position) end)
             end
 
-            -- Fire Remote Attack
             FireAttack(mob.model)
 
             if Config.InstaKill then
@@ -637,11 +641,12 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ============================================================
--- MOB / BOSS FARM — same attack engine
+-- MOB / BOSS FARM
 -- ============================================================
 coroutine.wrap(function()
     while true do
         task.wait(0.15)
+        if isQuesting then continue end -- Don't fling while questing
         if not Config.BossFarm and not Config.MobFarm then continue end
 
         local target = GetNearestMob(Config.MobTarget)
@@ -667,7 +672,6 @@ coroutine.wrap(function()
             pcall(function() Rem.MousePos:FireServer(thrp.Position) end)
         end
 
-        -- Fire Remote Attack
         FireAttack(target)
 
         if Config.InstaKill then
@@ -691,6 +695,7 @@ end)()
 coroutine.wrap(function()
     while true do
         task.wait(0.15)
+        if isQuesting then continue end
         if not Config.AutoSkills then continue end
         local target=GetNearestMob("All"); if not target then continue end
         local thrp=target:FindFirstChild("HumanoidRootPart"); if not thrp then continue end
@@ -710,6 +715,7 @@ end)()
 coroutine.wrap(function()
     while true do
         task.wait(0.1)
+        if isQuesting then continue end
         if not Config.AutoPilot and not Config.AttachStand then continue end
         local target=GetNearestMob("All"); if not target then continue end
         local thrp=target:FindFirstChild("HumanoidRootPart"); if not thrp then continue end
@@ -727,6 +733,7 @@ end)()
 coroutine.wrap(function()
     while true do
         task.wait(0.05)
+        if isQuesting then continue end
         if not Config.ProjectileRedirect then continue end
         local target
         if Config.RedirectTarget=="Mobs" then target=GetNearestMob("All")
