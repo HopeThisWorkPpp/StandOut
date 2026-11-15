@@ -27,7 +27,7 @@ local Remotes = {
     StandRoll        = SR:WaitForChild("StandRoll"),        -- RemoteFunction
     CosmeticRoll     = R:WaitForChild("CosmeticRoll"),      -- RemoteFunction
     Standify         = R:WaitForChild("Standify"),          -- RemoteEvent  (use stand)
-    StandFollow      = R:WaitForChild("StandFollow"),       -- RemoteEvent  (pilot/follow)
+    StandFollowPose  = R:WaitForChild("StandFollowPose"),   -- RemoteEvent  (pilot/follow) — real name from console
     StandStorage     = R:WaitForChild("StandStorage"),      -- RemoteEvent  (store/retrieve stand)
     StandPresentation= R:WaitForChild("StandPresentation"), -- RemoteEvent  (show stand)
     StandPalettes    = R:WaitForChild("StandPalettes"),     -- RemoteEvent  (stand colours)
@@ -461,7 +461,7 @@ coroutine.wrap(function()
 end)()
 
 -- ============================================================
--- STAND FOLLOW / PILOT  →  StandFollow remote
+-- STAND FOLLOW / PILOT  →  StandFollowPose remote
 -- ============================================================
 coroutine.wrap(function()
     while true do
@@ -473,13 +473,12 @@ coroutine.wrap(function()
                 local thrp = target:FindFirstChild("HumanoidRootPart")
                 if thrp then
                     pcall(function()
-                        Remotes.StandFollow:FireServer(
-                            thrp.Position,          -- pilot position
+                        Remotes.StandFollowPose:FireServer(
+                            thrp.Position,
                             Config.InfinitePilotRange and 9999 or nil,
                             Config.AttackWhileAttached
                         )
                     end)
-                    -- also sync mouse pos for attack aim
                     if Config.AimAtHead then
                         local head = target:FindFirstChild("Head") or thrp
                         pcall(function()
@@ -776,8 +775,8 @@ Players.PlayerRemoving:Connect(function(p)
     end
 end)
 
--- SESSION REPORT ON CLOSE
-game:BindToClose(function()
+-- SESSION REPORT ON LEAVE (BindToClose is server-only — not callable from a LocalScript)
+lp.AncestryChanged:Connect(function()
     if Config.WebhookSession then
         SendWebhook("Session Report", string.format(
             "Player: %s\nTime: %ds\nFarm: %s\nKA: %s\nRoll: %s",
