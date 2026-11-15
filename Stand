@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Combat Remote Found)
+-- [AR-AI] Stand Out — Full Script (Fixed Cat Handler + Mob Scan)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -342,6 +342,15 @@ coroutine.wrap(function()
             print("[AI] Active: " .. active .. " | Target: Loading...")
         end
 
+        -- Debug: print all models in workspace that could be cats
+        if active == "P9_05_FIGHT_JUNGLE_CATS" then
+            for _, v in ipairs(Workspace:GetDescendants()) do
+                if v:IsA("Model") and v:FindFirstChildOfClass("Humanoid") then
+                    print("[MOB SCAN] " .. v.Name)
+                end
+            end
+        end
+
         -- 1. Rohan Vault Story
         if active == "P9_03_STEAL_FROM_ROHAN_VAULT" then
             Notify("Vault","Step 1: Pulling bookshelf...")
@@ -425,35 +434,59 @@ coroutine.wrap(function()
             pcall(function() Rem.Quest:FireServer("Zone","EscapeExit") end)
             task.wait(3)
 
-        -- 2b. Cat / Wild mob kill quest
+        -- 2b. Cat / Wild mob kill quest (UPDATED)
         elseif active:lower():find("cat") or active:lower():find("wild") then
-            Notify("Quest","Killing Cat Size mobs...")
+            Notify("Quest", "Hunting Wild Cat Size mobs...")
             local killed = 0
-            for attempt = 1, 20 do
+            local needed = 3
+            
+            for attempt = 1, 30 do
+                -- Search ALL of workspace, not just Game folder
                 for _, v in ipairs(Workspace:GetDescendants()) do
-                    if v:IsA("Model") and v.Name:lower():find("cat") and v ~= lp.Character then
-                        local h = v:FindFirstChildOfClass("Humanoid")
-                        local vr = v:FindFirstChild("HumanoidRootPart")
-                        if h and h.Health > 0 and vr then
-                            local hrp = GetHRP()
-                            if hrp then
-                                hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0,2,0))
-                                task.wait(0.1)
+                    if v:IsA("Model") and v ~= lp.Character then
+                        -- Match "Wild Cat Size" or any cat variant
+                        if v.Name:lower():find("cat") or v.Name:lower():find("wild") then
+                            local h = v:FindFirstChildOfClass("Humanoid")
+                            local vr = v:FindFirstChild("HumanoidRootPart")
+                            if h and h.Health > 0 and vr then
+                                local hrp = GetHRP()
+                                if hrp then
+                                    -- TP close enough for server to register
+                                    hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0, 2, 0))
+                                    task.wait(0.08)
+                                end
+                                -- Fire damage remotes
+                                if Rem.MousePos then
+                                    pcall(function() Rem.MousePos:FireServer(vr.Position) end)
+                                end
+                                pcall(function() 
+                                    Rem.Combat:FireServer("Hit Character", v.Name, 1, 1, nil, false, nil, false, false, false, 1) 
+                                end)
+                                pcall(function()
+                                    task.spawn(function()
+                                        if Rem.CombatReturn then
+                                            Rem.CombatReturn:InvokeServer("HeavyAttack", v, vr.Position)
+                                        end
+                                    end)
+                                end)
+                                pcall(function() Rem.TrainingDummyHit:FireServer(v, 9999) end)
+                                -- Local kill
+                                h.Health = 0
+                                pcall(function() h:TakeDamage(99999) end)
+                                killed = killed + 1
+                                Notify("Quest", "Cat killed " .. killed .. "/" .. needed)
+                                task.wait(0.5)
+                                if killed >= needed then break end
                             end
-                            -- Fire the real combat remote
-                            pcall(function() Rem.Combat:FireServer("Hit Character", v.Name, 1, 1, nil, false, nil, false, false, false, 1) end)
-                            h.Health = 0
-                            pcall(function() h:TakeDamage(99999) end)
-                            killed = killed + 1
-                            Notify("Quest","Cat killed "..killed.."/3")
-                            task.wait(0.4)
                         end
                     end
                 end
+                if killed >= needed then break end
                 task.wait(1)
             end
-            Notify("Quest","Cats done.")
-            task.wait(2)
+            
+            Notify("Quest", "Cat hunt done — " .. killed .. " killed.")
+            task.wait(3)
 
         -- 3. Other Story Nodes
         elseif active == "P9_02_LOCATE_ROHAN_HOUSE" or active == "P9_02B_LOCATE_HIDDEN_VAULT" then
