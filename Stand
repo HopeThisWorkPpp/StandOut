@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Keybind Attack Engine)
+-- [AR-AI] Stand Out — Full Script (Remote Attack Engine)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -11,7 +11,6 @@ local Workspace  = game:GetService("Workspace")
 local CoreGui    = game:GetService("CoreGui")
 local StarterGui = game:GetService("StarterGui")
 local Lighting   = game:GetService("Lighting")
-local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local lp  = Players.LocalPlayer
 local cam = Workspace.CurrentCamera
@@ -187,49 +186,21 @@ local function FindNPC(name)
 end
 
 -- ============================================================
--- ATTACK ENGINE (Keybind Simulation)
+-- ATTACK ENGINE (Direct Remote Fire - No Key Simulation)
 -- ============================================================
-local function FireAttack(attackType)
-    local keybinds = {
-        Light  = Enum.KeyCode.Z,
-        Heavy  = Enum.KeyCode.X,
-        Skill1 = Enum.KeyCode.Q,
-        Skill2 = Enum.KeyCode.E,
-        Skill3 = Enum.KeyCode.R,
-        Skill4 = Enum.KeyCode.T,
-        EX     = Enum.KeyCode.F,
-        Dash   = Enum.KeyCode.C,
-    }
-    local kc = keybinds[attackType]
-    if not kc then return end
-
-    -- Method 1: VirtualInputManager
-    if VirtualInputManager then
-        pcall(function()
-            VirtualInputManager:SendKeyEvent(true, kc, false, game)
-            task.wait(0.05)
-            VirtualInputManager:SendKeyEvent(false, kc, false, game)
+local function FireAttack(targetModel)
+    -- 1. Force Stand to equip (prevents unequipping)
+    pcall(function() Rem.Standify:FireServer(true) end)
+    
+    -- 2. Fire Swing animation
+    pcall(function() Rem.Combat:FireServer("Swing") end)
+    
+    -- 3. Hit the target explicitly
+    if targetModel then
+        pcall(function() 
+            Rem.Combat:FireServer("Hit Character", targetModel.Name, 1, 1, nil, false, nil, false, false, false, 1) 
         end)
     end
-
-    -- Method 2: fireuserinputservice (Executor specific)
-    pcall(function()
-        local input = Instance.new("InputObject")
-        input.KeyCode = kc
-        input.UserInputType = Enum.UserInputType.Keyboard
-        input.UserInputState = Enum.UserInputState.Begin
-        fireuserinputservice(input, false)
-        task.wait(0.05)
-        input.UserInputState = Enum.UserInputState.End
-        fireuserinputservice(input, false)
-    end)
-
-    -- Method 3: Direct remote (Fallback)
-    pcall(function()
-        if Rem.CombatReturn then
-            Rem.CombatReturn:InvokeServer(attackType, nil, GetHRP() and GetHRP().Position or Vector3.zero)
-        end
-    end)
 end
 
 local function FaceTarget(targetHRP)
@@ -518,8 +489,8 @@ coroutine.wrap(function()
                                         pcall(function() Rem.MousePos:FireServer(vr.Position) end)
                                     end
                                     
-                                    -- Use Keybind Attack
-                                    FireAttack("Light")
+                                    -- Use Remote Attack Engine
+                                    FireAttack(v)
                                     
                                     h.Health = 0
                                     pcall(function() h:TakeDamage(99999) end)
@@ -560,7 +531,7 @@ coroutine.wrap(function()
                     TPTo(ahrp.Position,2)
                     local h=agent:FindFirstChildOfClass("Humanoid")
                     if h then 
-                        FireAttack("Heavy")
+                        FireAttack(agent)
                         h.Health = 0 
                     end
                 end
@@ -623,12 +594,9 @@ coroutine.wrap(function()
 end)()
 
 -- ============================================================
--- KILL AURA — TP on top + real attack inputs
+-- KILL AURA — TP on top + direct remote fire
 -- ============================================================
 local kaLast = 0
-local attackCycle = {"Light","Heavy","Skill1","Skill2","Skill3","EX"}
-local attackIdx = 1
-
 RunService.Heartbeat:Connect(function()
     if not Config.KillAura then return end
     if os.clock() - kaLast < 0.12 then return end
@@ -657,9 +625,8 @@ RunService.Heartbeat:Connect(function()
                 pcall(function() Rem.MousePos:FireServer(mob.hrp.Position) end)
             end
 
-            local atk = attackCycle[attackIdx]
-            attackIdx = (attackIdx % #attackCycle) + 1
-            FireAttack(atk)
+            -- Fire Remote Attack
+            FireAttack(mob.model)
 
             if Config.InstaKill then
                 mob.hum.Health = 0
@@ -700,9 +667,8 @@ coroutine.wrap(function()
             pcall(function() Rem.MousePos:FireServer(thrp.Position) end)
         end
 
-        local atk = attackCycle[attackIdx]
-        attackIdx = (attackIdx % #attackCycle) + 1
-        FireAttack(atk)
+        -- Fire Remote Attack
+        FireAttack(target)
 
         if Config.InstaKill then
             h.Health = 0
@@ -722,7 +688,6 @@ end)()
 -- ============================================================
 -- AUTO SKILLS
 -- ============================================================
-local skillIdx=1
 coroutine.wrap(function()
     while true do
         task.wait(0.15)
@@ -735,9 +700,7 @@ coroutine.wrap(function()
             pcall(function() Rem.MousePos:FireServer(aimPt) end)
         end
         
-        local atk = attackCycle[skillIdx]
-        skillIdx = (skillIdx % #attackCycle) + 1
-        FireAttack(atk)
+        FireAttack(target)
     end
 end)()
 
