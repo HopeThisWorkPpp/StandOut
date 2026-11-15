@@ -246,14 +246,50 @@ local function EnterZone(pos)
     pcall(function() Rem.Quest:FireServer("Zone",tostring(pos)) end)
 end
 
+-- ============================================================
+-- VAULT PROXIMITY PROMPT HELPER
+-- Real path: Workspace.Game.Map.RohanHouse.Vault.RohanVaultPromptAttachment.RohanVaultPrompt
+-- Action: "Crack Open" | HoldDuration: 4.5
+-- ============================================================
+local function FireVaultPrompt()
+    local ok, pp = pcall(function()
+        return Workspace:FindFirstChild("Game")
+            :FindFirstChild("Map")
+            :FindFirstChild("RohanHouse")
+            :FindFirstChild("Vault")
+            :FindFirstChild("RohanVaultPromptAttachment")
+            :FindFirstChild("RohanVaultPrompt")
+    end)
+    if not pp then
+        Notify("Vault", "Prompt not found — are you near Rohan house?")
+        return false
+    end
+
+    local vaultModel = pp.Parent and pp.Parent.Parent
+    local targetPos = (vaultModel and vaultModel.PrimaryPart and vaultModel.PrimaryPart.Position)
+                   or Vector3.new(2181.66, 27.55, 1502.78)
+    TPTo(targetPos, 2)
+    task.wait(0.4)
+
+    local fired = pcall(function()
+        fireproximityprompt(pp)
+    end)
+    if not fired then
+        pcall(function()
+            pp:InputHoldBegin()
+            task.wait(pp.HoldDuration + 0.1)
+            pp:InputHoldEnd()
+        end)
+    end
+
+    Notify("Vault", "Crack Open fired!")
+    return true
+end
+
 local QuestHandlers = {
     ["P9_03_STEAL_FROM_ROHAN_VAULT"] = function()
-        Notify("Quest","Stealing from vault...")
-        TPTo(Vector3.new(2181.66,27.55,1502.78),2); WaitFor(0.5)
-        SimInteract("Vault")
-        pcall(function() Rem.Quest:FireServer("Interact","Vault") end)
-        pcall(function() Rem.Quest:FireServer("Interact","RohanVault") end)
-        pcall(function() Rem.Quest:FireServer("Interact","Interact_RohanVault") end)
+        Notify("Quest","Cracking Rohan vault...")
+        FireVaultPrompt()
     end,
     ["P9_04_ESCAPE_ROHAN_HOUSE"] = function()
         Notify("Quest","Escaping Rohan house...")
