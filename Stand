@@ -315,34 +315,87 @@ coroutine.wrap(function()
             print("[AI] Active: " .. active .. " | Target: Loading...")
         end
 
-        -- 1. Rohan Vault Story (Strict Prompt Hold)
+        -- 1. Rohan Vault Story (Secret Bookshelf → Vault → Diamond)
         if active == "P9_03_STEAL_FROM_ROHAN_VAULT" then
-            if objectives and objectives["Interact_RohanVault"] then
-                -- Stage 1: Open the first vault door
-                Notify("Vault", "Opening 1st Door...")
-                TPTo(Vector3.new(2181.66, 27.55, 1502.78), 3)
-                task.wait(3)
-                HoldSpecificPrompt({"RohanVaultPrompt"})
-            else
-                -- Stage 2: Pick up diamond OR open bookshelf
-                Notify("Vault", "Looking for Diamond / Bookshelf...")
-                TPTo(Vector3.new(2181.66, 27.55, 1502.78), 3)
-                task.wait(2.5)
-
-                local diamond = FindPartByName("Diamond") or FindPartByName("RohanDiamond")
-                if diamond then
-                    local pos = diamond:IsA("Model") and diamond.PrimaryPart and diamond.PrimaryPart.Position or diamond.Position
-                    if pos then 
-                        Notify("Vault", "Diamond found! Holding to collect...")
-                        TPTo(pos, 2) 
-                        WaitFor(0.5)
-                        HoldSpecificPrompt({"DiamondPrompt", "Prompt"})
-                    end
-                else
-                    -- Open the secret bookshelf
-                    HoldSpecificPrompt({"SecretBookshelfPrompt"})
+            -- Step 1: Pull the secret bookshelf first
+            Notify("Vault","Step 1: Pulling bookshelf...")
+            local bookshelf
+            for _, v in ipairs(Workspace:GetDescendants()) do
+                if v:IsA("ProximityPrompt") and v.Name == "SecretBookshelfPrompt" and v.Enabled then
+                    bookshelf = v; break
                 end
             end
+            if bookshelf then
+                local bpart = bookshelf.Parent
+                while bpart and not bpart:IsA("BasePart") do bpart = bpart.Parent end
+                if bpart then TPTo(bpart.Position, 2); task.wait(0.5) end
+                pcall(function()
+                    bookshelf:InputHoldBegin()
+                    task.wait(bookshelf.HoldDuration + 0.3)
+                    bookshelf:InputHoldEnd()
+                end)
+                Notify("Vault","Bookshelf pulled.")
+                task.wait(2) -- wait for door to open
+            else
+                Notify("Vault","Bookshelf not found/already pulled.")
+            end
+
+            -- Step 2: Crack open the vault
+            Notify("Vault","Step 2: Cracking vault...")
+            local vaultPrompt
+            for _, v in ipairs(Workspace:GetDescendants()) do
+                if v:IsA("ProximityPrompt") and v.Name == "RohanVaultPrompt" and v.Enabled then
+                    vaultPrompt = v; break
+                end
+            end
+            if vaultPrompt then
+                local vpart = vaultPrompt.Parent
+                while vpart and not vpart:IsA("BasePart") do vpart = vpart.Parent end
+                if vpart then TPTo(vpart.Position, 2); task.wait(0.5) end
+                pcall(function()
+                    vaultPrompt:InputHoldBegin()
+                    task.wait(vaultPrompt.HoldDuration + 0.5)
+                    vaultPrompt:InputHoldEnd()
+                end)
+                Notify("Vault","Vault cracked!")
+                task.wait(2)
+            else
+                Notify("Vault","Vault prompt not found/already done.")
+            end
+
+            -- Step 3: grab diamond + any dropped items nearby
+            Notify("Vault","Step 3: Collecting diamond...")
+            task.wait(1)
+            for _, v in ipairs(Workspace:GetDescendants()) do
+                if v:IsA("ProximityPrompt") and v.Name == "WorldItemPickup" and v.Enabled then
+                    local ipart = v.Parent
+                    while ipart and not ipart:IsA("BasePart") do ipart = ipart.Parent end
+                    if ipart then
+                        local hrp = GetHRP()
+                        if hrp and (ipart.Position - hrp.Position).Magnitude < 100 then
+                            TPTo(ipart.Position, 2); task.wait(0.3)
+                            pcall(function()
+                                v:InputHoldBegin()
+                                task.wait(v.HoldDuration + 0.1)
+                                v:InputHoldEnd()
+                            end)
+                            task.wait(0.3)
+                        end
+                    end
+                end
+            end
+
+            local diamond = FindPartByName("Diamond") or FindPartByName("RohanDiamond")
+                or FindPartByName("Jewel") or FindPartByName("BlueDiamond")
+            if diamond then
+                local dpos = diamond:IsA("Model") and diamond.PrimaryPart and diamond.PrimaryPart.Position
+                          or (diamond:IsA("BasePart") and diamond.Position)
+                if dpos then TPTo(dpos, 2); task.wait(0.3) end
+                pcall(function() Rem.Item:FireServer("Collect", diamond) end)
+                pcall(function() Rem.Quest:FireServer("Interact", diamond.Name, diamond) end)
+            end
+            Notify("Vault","Vault sequence complete.")
+            task.wait(5) -- cooldown before retry
 
         -- 2. Escaping Rohan House
         elseif active == "P9_04_ESCAPE_ROHAN_HOUSE" then
@@ -565,6 +618,21 @@ coroutine.wrap(function()
                 if part then
                     TPTo(part.Position,2); WaitFor(0.2)
                     pcall(function() Rem.Item:FireServer("Collect",v) end)
+                end
+            end
+        end
+        -- sweep WorldItemPickup prompts (e.g. Mysterious Arrow in SpawnedItems)
+        for _,v in ipairs(Workspace:GetDescendants()) do
+            if v:IsA("ProximityPrompt") and v.Name == "WorldItemPickup" and v.Enabled then
+                local p=v.Parent
+                while p and not p:IsA("BasePart") do p = p.Parent end
+                if p then
+                    TPTo(p.Position,2); WaitFor(0.2)
+                    pcall(function()
+                        v:InputHoldBegin()
+                        task.wait(v.HoldDuration + 0.1)
+                        v:InputHoldEnd()
+                    end)
                 end
             end
         end
