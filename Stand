@@ -1,6 +1,5 @@
--- [AR-AI] Stand Out — Full Script (Final Merged)
+-- [AR-AI] Stand Out — Full Script (Adaptive Quest Engine)
 -- fraughting, illgeallycrime, Ar0
--- One paste. Everything works.
 
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -185,6 +184,19 @@ local function GetActiveQuest()
     local v=s:FindFirstChild("ActiveQuest"); return v and v.Value or nil
 end
 
+local function GetQuestObjectives()
+    local d=lp:FindFirstChild("Data"); if not d then return nil end
+    local s=d:FindFirstChild("Stats"); if not s then return nil end
+    local obj=s:FindFirstChild("QuestObjectives"); 
+    if obj and obj.Value ~= "[[]]" and obj.Value ~= "" then
+        local ok, decoded = pcall(function() return HttpService:JSONDecode(obj.Value) end)
+        if ok and decoded and decoded[1] then
+            return decoded[1] 
+        end
+    end
+    return nil
+end
+
 local function ServerHop()
     pcall(function()
         local data=HttpService:JSONDecode(
@@ -230,7 +242,6 @@ local function SimInteract(partName)
     pcall(function() Rem.Quest:FireServer("Interact",partName,part) end)
     pcall(function() Rem.Quest:FireServer("Interact",partName) end)
     pcall(function() Rem.Item:FireServer("Interact",part) end)
-    -- simulate H keypress
     pcall(function()
         local i=Instance.new("InputObject")
         i.KeyCode=Enum.KeyCode.H
@@ -241,159 +252,148 @@ local function SimInteract(partName)
     WaitFor(0.3)
 end
 
-local function EnterZone(pos)
-    TPTo(pos,1); WaitFor(0.8)
-    pcall(function() Rem.Quest:FireServer("Zone",tostring(pos)) end)
-end
-
--- ============================================================
--- VAULT PROXIMITY PROMPT HELPER
--- Uses full InputHoldBegin / InputHoldEnd sequence to simulate 4.5s hold
--- ============================================================
-local VAULT_COORDS = Vector3.new(2181.66, 27.55, 1502.78)
-
-local function FireVaultPrompt()
-    -- 1. Teleport first, unconditionally
-    Notify("Vault", "Teleporting to Rohan House...")
-    TPTo(VAULT_COORDS, 3)
-    task.wait(2.5) -- wait for stream
-
-    -- 2. Find the prompt
+local function HoldPrompt(promptName)
     local pp = nil
     for _, v in ipairs(Workspace:GetDescendants()) do
-        if v:IsA("ProximityPrompt") and v.Name == "RohanVaultPrompt" then
+        if v:IsA("ProximityPrompt") and v.Name == promptName then
             pp = v
             break
         end
     end
+    if not pp then return false end
 
-    if not pp then
-        Notify("Vault", "Prompt not found after TP")
-        return false
+    local model = pp.Parent and pp.Parent.Parent
+    if model and model.PrimaryPart then
+        TPTo(model.PrimaryPart.Position, 2)
+        WaitFor(0.5)
     end
 
-    -- 3. TP precisely onto the vault so we are within MaxActivationDistance
-    local vaultModel = pp.Parent and pp.Parent.Parent
-    if vaultModel and vaultModel.PrimaryPart then
-        TPTo(vaultModel.PrimaryPart.Position, 2)
-        task.wait(0.5)
-    end
-
-    -- 4. Hold the prompt properly
-    Notify("Vault", "Holding prompt...")
-    local holdSuccess = pcall(function()
+    Notify("Quest", "Holding "..promptName.."...")
+    pcall(function()
         pp:InputHoldBegin()
-        task.wait(pp.HoldDuration + 0.5) -- Wait 4.5s + buffer
+        task.wait(pp.HoldDuration + 0.5)
         pp:InputHoldEnd()
     end)
-
-    -- 5. Fallback if InputHold doesn't work (try executor's fireproximityprompt)
-    if not holdSuccess then
-        pcall(function() fireproximityprompt(pp) end)
-    end
-
-    Notify("Vault", "Hold sequence complete!")
-    task.wait(1)
+    Notify("Quest", "Hold complete.")
+    WaitFor(1)
     return true
 end
 
-local QuestHandlers = {
-    ["P9_03_STEAL_FROM_ROHAN_VAULT"] = function()
-        FireVaultPrompt()
-    end,
-    ["P9_04_ESCAPE_ROHAN_HOUSE"] = function()
-        Notify("Quest","Escaping Rohan house...")
-        TPTo(Vector3.new(1556.39,33.47,1529.06), 3)
-        WaitFor(0.8)
-        pcall(function() Rem.Quest:FireServer("Zone","EscapeExit") end)
-    end,
-    ["P9_02_LOCATE_ROHAN_HOUSE"] = function()
-        Notify("Quest","Locating Rohan house...")
-        TPTo(Vector3.new(2181.66,27.55,1502.78), 3)
-        WaitFor(1.5)
-        TalkNPC("Rohan Kishibe")
-    end,
-    ["P9_02B_LOCATE_HIDDEN_VAULT"] = function()
-        Notify("Quest","Locating vault...")
-        TPTo(Vector3.new(2181.66,27.55,1502.78), 3)
-        WaitFor(1.5)
-        TalkNPC("Rohan Kishibe")
-    end,
-    ["P9_01_MEET_MERYL"] = function()
-        Notify("Quest","Meeting Meryl...")
-        TalkNPC("Meryl Mei Qi")
-    end,
-    ["P9_01B_TAKE_HUBER"] = function()
-        Notify("Quest","Taking Huber...")
-        TalkNPC("Meryl Mei Qi"); WaitFor(0.3)
-        SimInteract("DiamotchFloorWatch")
-    end,
-    ["TUTORIAL_MEET_JODIO"] = function()
-        TalkNPC("TutorialJodio")
-    end,
-    ["TUTORIAL_FIND_ARROW"] = function()
-        SimInteract("TutorialArrowSand")
-        EnterZone(Vector3.new(-332.76,26.73,2242.04))
-    end,
-    ["DEFEAT AGENT"] = function()
-        Notify("Quest","Defeating agent...")
-        local agent=FindNPC("AlyoshaDichter")
-        if agent then
-            local ahrp=agent:FindFirstChild("HumanoidRootPart")
-            if ahrp then
-                TPTo(ahrp.Position,2); WaitFor(0.3)
-                local h=agent:FindFirstChildOfClass("Humanoid")
-                if h then h.Health=0 end
-                pcall(function() Rem.CombatReturn:InvokeServer("HeavyAttack",agent,ahrp.Position) end)
-            end
-        end
-    end,
-    ["ANGELO_JOB_PARTS"] = function()
-        TalkNPC("Angelo")
-        pcall(function() Rem.Quest:FireServer("Accept","ANGELO_JOB_PARTS") end)
-        pcall(function() Rem.Quest:FireServer("Progress","ANGELO_JOB_PARTS") end)
-    end,
-    ["MAJOR_TOM_SURVEY"] = function()
-        TalkNPC("Major Tom")
-        pcall(function() Rem.MajorTomQuest:FireServer("Accept") end)
-        pcall(function() Rem.MajorTomQuest:FireServer("Progress") end)
-        pcall(function() Rem.MajorTomQuest:FireServer("Complete") end)
-    end,
-}
-
-local questRunning=false
-local lastQuest=""
+-- ============================================================
+-- ADAPTIVE QUEST LOOP
+-- ============================================================
+local lastObjective=""
 coroutine.wrap(function()
     while true do
-        task.wait(1)
+        task.wait(2)
         if not Config.StoryFarm then continue end
-        if questRunning then continue end
-        local active=GetActiveQuest(); if not active then continue end
-        local handler=QuestHandlers[active]
-        if handler and active~=lastQuest then
-            questRunning=true
-            Notify("Story Farm","Quest: "..active)
-            pcall(handler)
-            lastQuest=active
-            questRunning=false
-        elseif handler and active==lastQuest then
-            task.wait(4)
-            questRunning=true
-            pcall(handler)
-            questRunning=false
+
+        local active = GetActiveQuest()
+        if not active then continue end
+        
+        local objectives = GetQuestObjectives()
+        local objString = ""
+        if objectives then
+            for k, v in pairs(objectives) do
+                objString = objString .. k .. ":" .. tostring(v) .. ","
+            end
+        end
+
+        -- 1. Rohan Vault Story
+        if active == "P9_03_STEAL_FROM_ROHAN_VAULT" then
+            if objectives and objectives["Interact_RohanVault"] then
+                -- Still need to open door
+                if objString ~= lastObjective then
+                    Notify("Auto Quest", "Opening vault...")
+                    lastObjective = objString
+                    TPTo(Vector3.new(2181.66, 27.55, 1502.78), 3)
+                    task.wait(2.5)
+                    if not HoldPrompt("RohanVaultPrompt") then
+                        HoldPrompt("SecretBookshelfPrompt") 
+                    end
+                end
+            else
+                -- Door is open, objective changed. Find Diamond.
+                if objString ~= lastObjective then
+                    Notify("Auto Quest", "Vault open! Looking for diamond...")
+                    lastObjective = objString
+                end
+                
+                local diamond = FindPartByName("Diamond") or FindPartByName("RohanDiamond")
+                if diamond then
+                    local pos = diamond:IsA("Model") and diamond.PrimaryPart and diamond.PrimaryPart.Position or diamond.Position
+                    if pos then 
+                        TPTo(pos, 2) 
+                        WaitFor(0.5)
+                        -- Simulate touch pickup
+                        pcall(function() Rem.Item:FireServer("Collect", diamond) end)
+                    end
+                end
+            end
+
+        -- 2. Escaping Rohan House
+        elseif active == "P9_04_ESCAPE_ROHAN_HOUSE" then
+            if objString ~= lastObjective then
+                Notify("Auto Quest", "Escaping Rohan House...")
+                lastObjective = objString
+                TPTo(Vector3.new(1556.39,33.47,1529.06), 3)
+                WaitFor(0.8)
+                pcall(function() Rem.Quest:FireServer("Zone","EscapeExit") end)
+            end
+
+        -- 3. Other Story Nodes
+        elseif active == "P9_02_LOCATE_ROHAN_HOUSE" or active == "P9_02B_LOCATE_HIDDEN_VAULT" then
+            if objString ~= lastObjective then
+                lastObjective = objString
+                TPTo(Vector3.new(2181.66,27.55,1502.78), 3); WaitFor(1.5); TalkNPC("Rohan Kishibe")
+            end
+        elseif active == "P9_01_MEET_MERYL" then
+            if objString ~= lastObjective then
+                lastObjective = objString; TalkNPC("Meryl Mei Qi")
+            end
+        elseif active == "P9_01B_TAKE_HUBER" then
+            if objString ~= lastObjective then
+                lastObjective = objString; TalkNPC("Meryl Mei Qi"); WaitFor(0.3); SimInteract("DiamotchFloorWatch")
+            end
+        elseif active == "TUTORIAL_MEET_JODIO" then
+            if objString ~= lastObjective then
+                lastObjective = objString; TalkNPC("TutorialJodio")
+            end
+        elseif active == "TUTORIAL_FIND_ARROW" then
+            if objString ~= lastObjective then
+                lastObjective = objString; SimInteract("TutorialArrowSand")
+            end
+        elseif active == "DEFEAT_AGENT" then
+            local agent = FindNPC("AlyoshaDichter")
+            if agent then
+                local ahrp=agent:FindFirstChild("HumanoidRootPart")
+                if ahrp then
+                    TPTo(ahrp.Position,2)
+                    local h=agent:FindFirstChildOfClass("Humanoid")
+                    if h then h.Health=0 end
+                    pcall(function() Rem.CombatReturn:InvokeServer("HeavyAttack",agent,ahrp.Position) end)
+                end
+            end
         end
     end
 end)()
 
+-- Side Quest Handler
 coroutine.wrap(function()
     while true do
         task.wait(2)
         if not Config.SideQuestFarm then continue end
         local aqp=lp:FindFirstChild("AvailableQuestPoints"); if not aqp then continue end
         for _,v in ipairs(aqp:GetChildren()) do
-            local qid=v.Name:gsub("AvailableQuest_","")
-            local handler=QuestHandlers[qid]
-            if handler then pcall(handler); WaitFor(1) end
+            if v.Name == "AvailableQuest_ANGELO_JOB_PARTS" then
+                TalkNPC("Angelo"); WaitFor(0.3)
+                pcall(function() Rem.Quest:FireServer("Accept","ANGELO_JOB_PARTS") end)
+            elseif v.Name == "AvailableQuest_MAJOR_TOM_SURVEY" then
+                TalkNPC("Major Tom"); WaitFor(0.3)
+                pcall(function() Rem.MajorTomQuest:FireServer("Accept") end)
+                pcall(function() Rem.MajorTomQuest:FireServer("Progress") end)
+            end
+            WaitFor(1)
         end
     end
 end)()
@@ -405,24 +405,13 @@ coroutine.wrap(function()
     while true do
         task.wait(0.6)
         if not Config.AutoRoll then continue end
-        local ok,result=pcall(function()
-            return Rem.StandRoll:InvokeServer(Config.ArrowType)
-        end)
+        local ok,result=pcall(function() return Rem.StandRoll:InvokeServer(Config.ArrowType) end)
         if ok and result then
-            local sName=type(result)=="string" and result
-                or (type(result)=="table" and (result.Name or result.Stand or result[1])) or ""
+            local sName=type(result)=="string" and result or (type(result)=="table" and (result.Name or result.Stand or result[1])) or ""
             if sName~="" then
                 for _,kw in ipairs({"Legendary","Mythical","Godly","Unique","Secret","Pinnacle"}) do
                     if sName:find(kw) then
-                        Config.AutoRoll=false
-                        Notify("Roll","Got "..kw..": "..sName)
-                        SendWebhook("Stand Rolled",sName.." ("..kw..")")
-                    end
-                end
-                for _,w in ipairs(Config.WantedStands) do
-                    if sName:lower():find(w:lower()) then
-                        Config.AutoRoll=false
-                        Notify("Roll","Got wanted: "..sName)
+                        Config.AutoRoll=false; Notify("Roll","Got "..kw..": "..sName); SendWebhook("Stand Rolled",sName)
                     end
                 end
             end
@@ -456,8 +445,7 @@ coroutine.wrap(function()
             hrp.CFrame=CFrame.new(thrp.Position+Config.FarmOffset)
             local h=target:FindFirstChildOfClass("Humanoid")
             if h and h.Health>0 then
-                if Config.InstaKill then
-                    h.Health=0
+                if Config.InstaKill then h.Health=0
                 else
                     local aimPt=(Config.AimAtHead and target:FindFirstChild("Head") or thrp).Position
                     pcall(function() Rem.MousePos:FireServer(aimPt) end)
@@ -484,8 +472,7 @@ RunService.Heartbeat:Connect(function()
     if os.clock()-kaLast<0.08 then return end
     kaLast=os.clock()
     local hrp=GetHRP(); if not hrp then return end
-    local target=GetNearestMob("All")
-    if not target then return end
+    local target=GetNearestMob("All"); if not target then return end
     local thrp=target:FindFirstChild("HumanoidRootPart"); if not thrp then return end
     if (thrp.Position-hrp.Position).Magnitude>Config.KillAuraRange then return end
     local aimPt=(Config.AimAtHead and target:FindFirstChild("Head") or thrp).Position
@@ -537,8 +524,7 @@ coroutine.wrap(function()
         task.wait(0.05)
         if not Config.ProjectileRedirect then continue end
         local target
-        if Config.RedirectTarget=="Mobs" then
-            target=GetNearestMob("All")
+        if Config.RedirectTarget=="Mobs" then target=GetNearestMob("All")
         else
             local best,bestD=nil,math.huge
             local hrp=GetHRP()
@@ -829,11 +815,13 @@ Players.PlayerRemoving:Connect(function(p)
     end
 end)
 
+-- ToClient listener
 Rem.ToClient.OnClientEvent:Connect(function(action,data)
     if Config.EventNotifier then Notify("Event: "..tostring(action),tostring(data)) end
     if Config.WebhookEvents then SendWebhook("Event: "..tostring(action),tostring(data)) end
 end)
 
+-- Nearby alert
 local alertCD=0
 RunService.Heartbeat:Connect(function()
     if not Config.NearbyAlert then return end
@@ -1075,15 +1063,7 @@ Toggle(F,"Keep Legendary+","KeepLegendaryPlus")
 Slider(F,"Back Off HP %","BackOffHP",1,99)
 Btn(F,"Set Farm Position Here",function()
     local hrp=GetHRP()
-    if hrp then Config.FarmPosition=hrp.Position; Notify("Farm Pos","Set to "..tostring(hrp.Position)) end
-end)
-Btn(F,"Run Active Quest Now",function()
-    local active=GetActiveQuest()
-    if active then
-        Notify("Quest","Running: "..active)
-        local h=QuestHandlers[active]
-        if h then coroutine.wrap(h)() else Notify("Quest","No handler: "..active) end
-    else Notify("Quest","No active quest found") end
+    if hrp then Config.FarmPosition=hrp.Position; Notify("Farm Pos","Set!") end
 end)
 
 local C=TabObjs["Combat"].sf
@@ -1217,7 +1197,7 @@ Toggle(WH,"Event Posts","WebhookEvents")
 Toggle(WH,"Session Reports","WebhookSession")
 Btn(WH,"Test Webhook",function()
     if Config.WebhookURL~="" then
-        SendWebhook("Test","Script online. Player: "..lp.Name.." | Stand: "..(lp:FindFirstChild("Data") and lp.Data:FindFirstChild("Stand") and lp.Data.Stand.Value or "?"))
+        SendWebhook("Test","Script online. Player: "..lp.Name)
         Notify("Webhook","Sent.")
     else Notify("Webhook","No URL set.") end
 end)
