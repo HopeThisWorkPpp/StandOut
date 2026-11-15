@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Fixed Remote Types)
+-- [AR-AI] Stand Out — Full Script (Combat Fixes Applied)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -62,8 +62,19 @@ local Rem = {
     ToClient          = getRemote(R, "ToClient"),
     ServerDirectory   = getRemote(R, "ServerDirectory"),
     AfkRejoin         = getRemote(R, "AfkRejoin"),
-    MousePos          = getRemote(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Utility"), "MousePositionServerRemote"),
 }
+
+-- Safe MousePos Load
+local function SafeGetMouseRemote()
+    local ok, result = pcall(function()
+        return ReplicatedStorage
+            :WaitForChild("Modules", 3)
+            :WaitForChild("Utility", 3)
+            :FindFirstChild("MousePositionServerRemote")
+    end)
+    return ok and result or nil
+end
+Rem.MousePos = SafeGetMouseRemote()
 
 pcall(function()
     if setclipboard then setclipboard(copiedText) end
@@ -332,7 +343,6 @@ coroutine.wrap(function()
 
         -- 1. Rohan Vault Story (Secret Bookshelf → Vault → Diamond)
         if active == "P9_03_STEAL_FROM_ROHAN_VAULT" then
-            -- Step 1: Pull the secret bookshelf first
             Notify("Vault","Step 1: Pulling bookshelf...")
             local bookshelf
             for _, v in ipairs(Workspace:GetDescendants()) do
@@ -350,12 +360,11 @@ coroutine.wrap(function()
                     bookshelf:InputHoldEnd()
                 end)
                 Notify("Vault","Bookshelf pulled.")
-                task.wait(2) -- wait for door to open
+                task.wait(2)
             else
                 Notify("Vault","Bookshelf not found/already pulled.")
             end
 
-            -- Step 2: Crack open the vault
             Notify("Vault","Step 2: Cracking vault...")
             local vaultPrompt
             for _, v in ipairs(Workspace:GetDescendants()) do
@@ -378,7 +387,6 @@ coroutine.wrap(function()
                 Notify("Vault","Vault prompt not found/already done.")
             end
 
-            -- Step 3: pick up DroppedRohanDiamond
             Notify("Vault","Step 3: Picking up diamond...")
             task.wait(1.5)
 
@@ -468,7 +476,7 @@ coroutine.wrap(function()
                     TPTo(ahrp.Position,2)
                     local h=agent:FindFirstChildOfClass("Humanoid")
                     if h then h.Health=0 end
-                    pcall(function() Rem.CombatReturn:InvokeServer("HeavyAttack",agent,ahrp.Position) end)
+                    pcall(function() task.spawn(function() Rem.CombatReturn:InvokeServer("HeavyAttack",agent,ahrp.Position) end) end)
                 end
             end
         end
@@ -529,38 +537,43 @@ coroutine.wrap(function()
 end)()
 
 -- ============================================================
--- KILL AURA — Direct Health Write & InvokeServer
+-- KILL AURA — Claude's Fixes (TP Sync + task.spawn)
 -- ============================================================
 local kaLast = 0
 RunService.Heartbeat:Connect(function()
     if not Config.KillAura then return end
-    if os.clock() - kaLast < 0.05 then return end
+    if os.clock() - kaLast < 0.08 then return end
     kaLast = os.clock()
-    local hrp = GetHRP(); if not hrp then return end
-    
+
+    local hrp = GetHRP()
+    if not hrp then return end
+
     for _, v in ipairs(Workspace:GetDescendants()) do
         if v:IsA("Model") and v ~= lp.Character then
             local h = v:FindFirstChildOfClass("Humanoid")
             local vr = v:FindFirstChild("HumanoidRootPart")
             if h and h.Health > 0 and vr then
                 if (vr.Position - hrp.Position).Magnitude <= Config.KillAuraRange then
-                    -- TP to the mob first so the server registers the distance
-                    hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0, 2, 0))
-                    task.wait(0.03)
-
-                    -- Fire the damage remotes
-                    pcall(function() Rem.MousePos:FireServer(vr.Position) end)
-                    pcall(function() Rem.CombatReturn:InvokeServer("HeavyAttack", v, vr.Position) end)
-                    pcall(function() Rem.TrainingDummyHit:FireServer(v, 9999) end)
-                    
-                    -- Local visual write
-                    if Config.InstaKill then
-                        h.Health = 0
-                        pcall(function() h:TakeDamage(99999) end)
-                    else
-                        h.Health = math.max(0, h.Health - 30)
-                        pcall(function() h:TakeDamage(30) end)
-                    end
+                    task.spawn(function()
+                        hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0, 2, 0))
+                        task.wait(0.05)
+                        
+                        if Rem.MousePos then
+                            pcall(function() Rem.MousePos:FireServer(vr.Position) end)
+                        end
+                        pcall(function()
+                            task.spawn(function()
+                                Rem.CombatReturn:InvokeServer("HeavyAttack", v, vr.Position)
+                            end)
+                        end)
+                        pcall(function() Rem.TrainingDummyHit:FireServer(v, 9999) end)
+                        
+                        if Config.InstaKill then
+                            h.Health = 0
+                        else
+                            pcall(function() h:TakeDamage(30) end)
+                        end
+                    end)
                 end
             end
         end
@@ -568,7 +581,7 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ============================================================
--- MOB / BOSS FARM — TP + direct kill
+-- MOB / BOSS FARM — Claude's Fixes
 -- ============================================================
 coroutine.wrap(function()
     while true do
@@ -579,22 +592,31 @@ coroutine.wrap(function()
         if target then
             local thrp = target:FindFirstChild("HumanoidRootPart")
             if not thrp then continue end
-            hrp.CFrame = CFrame.new(thrp.Position + Vector3.new(0, 2, 0))
             
-            local h = target:FindFirstChildOfClass("Humanoid")
-            if h and h.Health > 0 then
-                pcall(function() Rem.MousePos:FireServer(thrp.Position) end)
-                pcall(function() Rem.CombatReturn:InvokeServer("HeavyAttack", target, thrp.Position) end)
-                pcall(function() Rem.TrainingDummyHit:FireServer(target, 9999) end)
+            task.spawn(function()
+                hrp.CFrame = CFrame.new(thrp.Position + Vector3.new(0, 2, 0))
+                task.wait(0.05)
+                
+                local h = target:FindFirstChildOfClass("Humanoid")
+                if h and h.Health > 0 then
+                    if Rem.MousePos then
+                        pcall(function() Rem.MousePos:FireServer(thrp.Position) end)
+                    end
+                    pcall(function()
+                        task.spawn(function()
+                            Rem.CombatReturn:InvokeServer("HeavyAttack", target, thrp.Position)
+                        end)
+                    end)
+                    pcall(function() Rem.TrainingDummyHit:FireServer(target, 9999) end)
 
-                if Config.InstaKill then
-                    h.Health = 0
-                    pcall(function() h:TakeDamage(99999) end)
-                else
-                    h.Health = math.max(0, h.Health - 30)
-                    pcall(function() h:TakeDamage(30) end)
+                    if Config.InstaKill then
+                        h.Health = 0
+                    else
+                        pcall(function() h:TakeDamage(30) end)
+                    end
                 end
-            end
+            end)
+            
             local myH = GetHum()
             if myH and myH.Health < (myH.MaxHealth * Config.BackOffHP / 100) then
                 hrp.CFrame = CFrame.new(Config.FarmPosition + Vector3.new(0, 10, 0))
@@ -618,8 +640,15 @@ coroutine.wrap(function()
         local aimPt=(Config.AimAtHead and target:FindFirstChild("Head") or thrp).Position
         local skills={"Skill1","Skill2","Skill3","Skill4","StandBarrage"}
         local sk=skills[skillIdx]; skillIdx=(skillIdx%#skills)+1
-        pcall(function() Rem.MousePos:FireServer(aimPt) end)
-        pcall(function() Rem.CombatReturn:InvokeServer(sk,target,aimPt) end)
+        
+        if Rem.MousePos then
+            pcall(function() Rem.MousePos:FireServer(aimPt) end)
+        end
+        pcall(function()
+            task.spawn(function()
+                Rem.CombatReturn:InvokeServer(sk,target,aimPt)
+            end)
+        end)
     end
 end)()
 
@@ -633,7 +662,9 @@ coroutine.wrap(function()
         local target=GetNearestMob("All"); if not target then continue end
         local thrp=target:FindFirstChild("HumanoidRootPart"); if not thrp then continue end
         local aimPt=(Config.AimAtHead and target:FindFirstChild("Head") or thrp).Position
-        pcall(function() Rem.MousePos:FireServer(aimPt) end)
+        if Rem.MousePos then
+            pcall(function() Rem.MousePos:FireServer(aimPt) end)
+        end
         pcall(function() Rem.StandFollowPose:FireServer(thrp.Position,Config.AttachStand,Config.AttackWhileAttached) end)
     end
 end)()
@@ -665,7 +696,9 @@ coroutine.wrap(function()
         local aimPt=(Config.AimAtHead and target:FindFirstChild("Head") or target:FindFirstChild("HumanoidRootPart"))
         if aimPt then
             pcall(function() Rem.ProjectileAim:FireServer(aimPt.Position) end)
-            pcall(function() Rem.MousePos:FireServer(aimPt.Position) end)
+            if Rem.MousePos then
+                pcall(function() Rem.MousePos:FireServer(aimPt.Position) end)
+            end
         end
     end
 end)()
@@ -690,7 +723,6 @@ coroutine.wrap(function()
                 end
             end
         end
-        -- sweep WorldItemPickup prompts (e.g. Mysterious Arrow in SpawnedItems)
         for _,v in ipairs(Workspace:GetDescendants()) do
             if v:IsA("ProximityPrompt") and v.Name == "WorldItemPickup" and v.Enabled then
                 local p=v.Parent
