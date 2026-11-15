@@ -248,32 +248,43 @@ end
 
 -- ============================================================
 -- VAULT PROXIMITY PROMPT HELPER
--- Real path: Workspace.Game.Map.RohanHouse.Vault.RohanVaultPromptAttachment.RohanVaultPrompt
--- Action: "Crack Open" | HoldDuration: 4.5
+-- Teleports to Rohan House FIRST, waits for stream, then fires prompt.
+-- Active quest objective is Interact_RohanVault; vault is a ProximityPrompt:
+-- Workspace.Game.Map.RohanHouse.Vault.RohanVaultPromptAttachment.RohanVaultPrompt
 -- ============================================================
+local VAULT_COORDS = Vector3.new(2181.66, 27.55, 1502.78)
+
 local function FireVaultPrompt()
-    local ok, pp = pcall(function()
-        return Workspace:FindFirstChild("Game")
-            :FindFirstChild("Map")
-            :FindFirstChild("RohanHouse")
-            :FindFirstChild("Vault")
-            :FindFirstChild("RohanVaultPromptAttachment")
-            :FindFirstChild("RohanVaultPrompt")
-    end)
+    -- STEP 1: Teleport unconditionally, before any lookup
+    Notify("Vault", "Teleporting to Rohan House...")
+    TPTo(VAULT_COORDS, 3)
+
+    -- STEP 2: Wait for the area to stream in
+    task.wait(2.5)
+
+    -- STEP 3: Find the prompt by name (path-independent)
+    local pp = nil
+    for _, v in ipairs(Workspace:GetDescendants()) do
+        if v:IsA("ProximityPrompt") and v.Name == "RohanVaultPrompt" then
+            pp = v
+            break
+        end
+    end
+
     if not pp then
-        Notify("Vault", "Prompt not found — are you near Rohan house?")
+        Notify("Vault", "RohanVaultPrompt not found after TP")
         return false
     end
 
+    -- STEP 4: TP precisely onto the vault so we're in activation range
     local vaultModel = pp.Parent and pp.Parent.Parent
-    local targetPos = (vaultModel and vaultModel.PrimaryPart and vaultModel.PrimaryPart.Position)
-                   or Vector3.new(2181.66, 27.55, 1502.78)
-    TPTo(targetPos, 2)
-    task.wait(0.4)
+    if vaultModel and vaultModel.PrimaryPart then
+        TPTo(vaultModel.PrimaryPart.Position, 2)
+        task.wait(0.4)
+    end
 
-    local fired = pcall(function()
-        fireproximityprompt(pp)
-    end)
+    -- STEP 5: Fire the prompt (Crack Open, HoldDuration 4.5)
+    local fired = pcall(function() fireproximityprompt(pp) end)
     if not fired then
         pcall(function()
             pp:InputHoldBegin()
@@ -288,23 +299,25 @@ end
 
 local QuestHandlers = {
     ["P9_03_STEAL_FROM_ROHAN_VAULT"] = function()
-        Notify("Quest","Cracking Rohan vault...")
         FireVaultPrompt()
     end,
     ["P9_04_ESCAPE_ROHAN_HOUSE"] = function()
         Notify("Quest","Escaping Rohan house...")
-        EnterZone(Vector3.new(1556.39,33.47,1529.06))
+        TPTo(Vector3.new(1556.39,33.47,1529.06), 3)
+        WaitFor(0.8)
         pcall(function() Rem.Quest:FireServer("Zone","EscapeExit") end)
     end,
     ["P9_02_LOCATE_ROHAN_HOUSE"] = function()
         Notify("Quest","Locating Rohan house...")
-        EnterZone(Vector3.new(2181.66,27.55,1502.78))
+        TPTo(Vector3.new(2181.66,27.55,1502.78), 3)
+        WaitFor(1.5)
         TalkNPC("Rohan Kishibe")
     end,
     ["P9_02B_LOCATE_HIDDEN_VAULT"] = function()
         Notify("Quest","Locating vault...")
+        TPTo(Vector3.new(2181.66,27.55,1502.78), 3)
+        WaitFor(1.5)
         TalkNPC("Rohan Kishibe")
-        EnterZone(Vector3.new(2181.66,27.55,1502.78))
     end,
     ["P9_01_MEET_MERYL"] = function()
         Notify("Quest","Meeting Meryl...")
@@ -364,7 +377,6 @@ coroutine.wrap(function()
             lastQuest=active
             questRunning=false
         elseif handler and active==lastQuest then
-            -- retry same quest after delay
             task.wait(4)
             questRunning=true
             pcall(handler)
@@ -652,7 +664,6 @@ RunService.RenderStepped:Connect(function()
         end
     end
 
-    -- visuals
     if Config.Fullbright then
         Lighting.Brightness=2; Lighting.GlobalShadows=false
         Lighting.Ambient=Color3.new(1,1,1); Lighting.OutdoorAmbient=Color3.new(1,1,1)
@@ -818,13 +829,11 @@ Players.PlayerRemoving:Connect(function(p)
     end
 end)
 
--- ToClient listener
 Rem.ToClient.OnClientEvent:Connect(function(action,data)
     if Config.EventNotifier then Notify("Event: "..tostring(action),tostring(data)) end
     if Config.WebhookEvents then SendWebhook("Event: "..tostring(action),tostring(data)) end
 end)
 
--- Nearby alert
 local alertCD=0
 RunService.Heartbeat:Connect(function()
     if not Config.NearbyAlert then return end
@@ -1051,7 +1060,6 @@ TabObjs["Farm"].sf.Visible=true
 TabObjs["Farm"].btn.BackgroundColor3=Color3.fromRGB(220,40,40)
 TabObjs["Farm"].btn.TextColor3=Color3.new(1,1,1)
 
--- FARM TAB
 local F=TabObjs["Farm"].sf
 Toggle(F,"Boss Farm","BossFarm")
 Toggle(F,"Mob Farm","MobFarm")
@@ -1078,7 +1086,6 @@ Btn(F,"Run Active Quest Now",function()
     else Notify("Quest","No active quest found") end
 end)
 
--- COMBAT TAB
 local C=TabObjs["Combat"].sf
 Toggle(C,"Kill Aura","KillAura")
 Slider(C,"Kill Aura Range","KillAuraRange",5,150)
@@ -1095,7 +1102,6 @@ Toggle(C,"Attach Stand","AttachStand")
 Toggle(C,"Auto Pilot","AutoPilot")
 Toggle(C,"Attack While Attached","AttackWhileAttached")
 
--- MOVEMENT TAB
 local M=TabObjs["Movement"].sf
 Toggle(M,"Fly","Fly")
 Slider(M,"Fly Speed","FlySpeed",10,300)
@@ -1114,7 +1120,6 @@ Toggle(M,"Anti Void","AntiVoid")
 Toggle(M,"Anti Fling","AntiFling")
 Toggle(M,"Local Headless","LocalHeadless")
 
--- ESP TAB
 local E=TabObjs["ESP"].sf
 Toggle(E,"Player ESP","PlayerESP")
 Toggle(E,"Local Player ESP","LocalPlayerESP")
@@ -1127,7 +1132,6 @@ Toggle(E,"ESP Health Bars","ESPHealthBars")
 Toggle(E,"ESP Names","ESPNames")
 Toggle(E,"ESP Distance","ESPDistance")
 
--- VISUAL TAB
 local V=TabObjs["Visual"].sf
 Toggle(V,"Fullbright","Fullbright")
 Toggle(V,"No Fog","NoFog")
@@ -1167,7 +1171,6 @@ Toggle(V,"Potato Mode","PotatoMode",function(on)
     end
 end)
 
--- TELEPORT TAB
 local T=TabObjs["Teleport"].sf
 Input(T,"Area Name","AreaTPName")
 Btn(T,"Go to Area",function()
@@ -1196,7 +1199,6 @@ Btn(T,"Copy Position",function()
     end
 end)
 
--- SERVER TAB
 local SV=TabObjs["Server"].sf
 Toggle(SV,"Join/Leave Logger","JoinLeaveLogger")
 Toggle(SV,"Chat Logger","ChatLogger")
@@ -1209,7 +1211,6 @@ Btn(SV,"Copy Job ID",function()
     setclipboard(game.JobId); Notify("Copied","Job ID: "..game.JobId)
 end)
 
--- WEBHOOK TAB
 local WH=TabObjs["Webhook"].sf
 Input(WH,"Webhook URL","WebhookURL")
 Toggle(WH,"Event Posts","WebhookEvents")
@@ -1221,7 +1222,6 @@ Btn(WH,"Test Webhook",function()
     else Notify("Webhook","No URL set.") end
 end)
 
--- KEYBIND
 UserInputService.InputBegan:Connect(function(inp,gpe)
     if gpe then return end
     if inp.KeyCode==Enum.KeyCode.Insert or inp.KeyCode==Enum.KeyCode.Delete then
@@ -1229,7 +1229,6 @@ UserInputService.InputBegan:Connect(function(inp,gpe)
     end
 end)
 
--- BOOT
 local activeQ=GetActiveQuest() or "none"
 Notify("Stand Out Script","Loaded! Active quest: "..activeQ)
 print("[AR-AI] Stand Out Final — fraughting illgeallycrime Ar0")
