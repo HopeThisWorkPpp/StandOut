@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Two-Vault Fix)
+-- [AR-AI] Stand Out — Full Script (Final Two-Vault Fix)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -318,7 +318,7 @@ coroutine.wrap(function()
                     HoldPrompt("SecretBookshelfPrompt") 
                 end
             else
-                -- Stage 2: Door 1 is open, objective is now to pick up the diamond (which requires opening the secret bookshelf)
+                -- Stage 2: Door 1 is open, objective is now to pick up the diamond
                 Notify("Vault", "Looking for Diamond...")
                 TPTo(Vector3.new(2181.66, 27.55, 1502.78), 3)
                 task.wait(2.5)
@@ -327,10 +327,14 @@ coroutine.wrap(function()
                 if diamond then
                     local pos = diamond:IsA("Model") and diamond.PrimaryPart and diamond.PrimaryPart.Position or diamond.Position
                     if pos then 
-                        Notify("Vault", "Found Diamond! Collecting...")
+                        Notify("Vault", "Found Diamond! Holding to pick up...")
                         TPTo(pos, 2) 
                         WaitFor(0.5)
-                        pcall(function() Rem.Item:FireServer("Collect", diamond) end)
+                        -- Diamond requires a hold prompt, not just remote firing
+                        if not HoldPrompt("DiamondPrompt") then
+                             -- Fallback if prompt name is different
+                             pcall(function() Rem.Item:FireServer("Collect", diamond) end)
+                        end
                     end
                 else
                     -- If we don't see the diamond, we must need to open the second vault (SecretBookshelf)
@@ -341,7 +345,13 @@ coroutine.wrap(function()
                     local diamond2 = FindPartByName("Diamond") or FindPartByName("RohanDiamond")
                     if diamond2 then
                         local pos2 = diamond2:IsA("Model") and diamond2.PrimaryPart and diamond2.PrimaryPart.Position or diamond2.Position
-                        if pos2 then TPTo(pos2, 2); pcall(function() Rem.Item:FireServer("Collect", diamond2) end) end
+                        if pos2 then 
+                            TPTo(pos2, 2); 
+                            WaitFor(0.5)
+                            if not HoldPrompt("DiamondPrompt") then
+                                pcall(function() Rem.Item:FireServer("Collect", diamond2) end)
+                            end
+                        end
                     end
                 end
             end
