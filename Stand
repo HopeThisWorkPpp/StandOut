@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Universal Mob Search + Kill Quests)
+-- [AR-AI] Stand Out — Full Script (Keybind Attack Engine)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -11,6 +11,7 @@ local Workspace  = game:GetService("Workspace")
 local CoreGui    = game:GetService("CoreGui")
 local StarterGui = game:GetService("StarterGui")
 local Lighting   = game:GetService("Lighting")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 local lp  = Players.LocalPlayer
 local cam = Workspace.CurrentCamera
@@ -43,8 +44,8 @@ local Rem = {
     StandStorage      = getRemote(R, "StandStorage"),
     StandPresentation = getRemote(R, "StandPresentation"),
     Open              = getRemote(SR, "Open"),
-    Combat            = getRemote(R, "Combat"),         -- THE REAL COMBAT REMOTE
-    CombatReturn      = getRemote(R, "CombatReturn"),   -- Kept just in case
+    Combat            = getRemote(R, "Combat"),
+    CombatReturn      = getRemote(R, "CombatReturn"),
     ProjectileAim     = getRemote(R, "ProjectileAim"),
     TrainingDummyHit  = getRemote(R, "TrainingDummyHit"),
     BarrageCancel     = getRemote(R, "BarrageCancel"),
@@ -186,40 +187,97 @@ local function FindNPC(name)
 end
 
 -- ============================================================
--- UNIVERSAL MOB SEARCH (checks Workspace AND Players folder)
+-- ATTACK ENGINE (Keybind Simulation)
 -- ============================================================
-local function GetNearestMob(tag)
+local function FireAttack(attackType)
+    local keybinds = {
+        Light  = Enum.KeyCode.Z,
+        Heavy  = Enum.KeyCode.X,
+        Skill1 = Enum.KeyCode.Q,
+        Skill2 = Enum.KeyCode.E,
+        Skill3 = Enum.KeyCode.R,
+        Skill4 = Enum.KeyCode.T,
+        EX     = Enum.KeyCode.F,
+        Dash   = Enum.KeyCode.C,
+    }
+    local kc = keybinds[attackType]
+    if not kc then return end
+
+    -- Method 1: VirtualInputManager
+    if VirtualInputManager then
+        pcall(function()
+            VirtualInputManager:SendKeyEvent(true, kc, false, game)
+            task.wait(0.05)
+            VirtualInputManager:SendKeyEvent(false, kc, false, game)
+        end)
+    end
+
+    -- Method 2: fireuserinputservice (Executor specific)
+    pcall(function()
+        local input = Instance.new("InputObject")
+        input.KeyCode = kc
+        input.UserInputType = Enum.UserInputType.Keyboard
+        input.UserInputState = Enum.UserInputState.Begin
+        fireuserinputservice(input, false)
+        task.wait(0.05)
+        input.UserInputState = Enum.UserInputState.End
+        fireuserinputservice(input, false)
+    end)
+
+    -- Method 3: Direct remote (Fallback)
+    pcall(function()
+        if Rem.CombatReturn then
+            Rem.CombatReturn:InvokeServer(attackType, nil, GetHRP() and GetHRP().Position or Vector3.zero)
+        end
+    end)
+end
+
+local function FaceTarget(targetHRP)
     local hrp = GetHRP()
-    if not hrp then return nil end
-    local best, bestD = nil, math.huge
+    if not hrp or not targetHRP then return end
+    local dir = (targetHRP.Position - hrp.Position).Unit
+    hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + Vector3.new(dir.X, 0, dir.Z))
+end
 
-    local function searchIn(root)
-        for _, v in ipairs(root:GetDescendants()) do
-            if v:IsA("Model") and v ~= lp.Character then
-                -- skip actual player characters
-                local isPlayer = false
-                for _, p in ipairs(Players:GetPlayers()) do
-                    if p.Character == v then isPlayer = true; break end
-                end
-                if isPlayer then continue end
-
-                local h = v:FindFirstChildOfClass("Humanoid")
-                local vr = v:FindFirstChild("HumanoidRootPart")
-                if h and h.Health > 0 and vr then
-                    if tag == "All" or v.Name:lower():find(tag:lower()) then
-                        local d = (vr.Position - hrp.Position).Magnitude
-                        if d < bestD then bestD = d; best = v end
-                    end
+-- ============================================================
+-- UNIVERSAL MOB SEARCH (Workspace + Players folder)
+-- ============================================================
+local function GetAllMobs(tag, root)
+    local hrp = GetHRP()
+    local results = {}
+    for _, v in ipairs(root:GetDescendants()) do
+        if v:IsA("Model") and v ~= lp.Character then
+            local isPlayer = false
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p.Character == v then isPlayer = true break end
+            end
+            if isPlayer then continue end
+            local h = v:FindFirstChildOfClass("Humanoid")
+            local vr = v:FindFirstChild("HumanoidRootPart")
+            if h and h.Health > 0 and vr then
+                if tag == "All" or v.Name:lower():find(tag:lower()) then
+                    local d = hrp and (vr.Position - hrp.Position).Magnitude or 999
+                    table.insert(results, {model=v, hrp=vr, hum=h, dist=d})
                 end
             end
         end
     end
-
-    searchIn(Workspace)
-    searchIn(Players) -- Stand Out spawns mob clones here
-    return best
+    return results
 end
 
+local function GetNearestMob(tag)
+    local r1 = GetAllMobs(tag, Workspace)
+    local r2 = GetAllMobs(tag, Players)
+    local merged = {}
+    for _, v in ipairs(r1) do table.insert(merged, v) end
+    for _, v in ipairs(r2) do table.insert(merged, v) end
+    table.sort(merged, function(a,b) return a.dist < b.dist end)
+    return merged[1] and merged[1].model or nil
+end
+
+-- ============================================================
+-- QUEST ENGINE
+-- ============================================================
 local function GetActiveQuest()
     local d=lp:FindFirstChild("Data"); if not d then return nil end
     local s=d:FindFirstChild("Stats"); if not s then return nil end
@@ -239,29 +297,6 @@ local function GetQuestObjectives()
     return nil
 end
 
-local function ServerHop()
-    pcall(function()
-        local data=HttpService:JSONDecode(
-            game:HttpGet("https://games.roproxy.com/v1/games/"..game.PlaceId.."/servers/Public?limit=25"))
-        if data and data.data then
-            local pool={}
-            for _,s in ipairs(data.data) do
-                if s.id~=game.JobId and s.playing<s.maxPlayers then
-                    table.insert(pool,s.id)
-                end
-            end
-            if #pool>0 then
-                TeleportService:TeleportToPlaceInstance(game.PlaceId,pool[math.random(1,#pool)])
-                return
-            end
-        end
-        TeleportService:Teleport(game.PlaceId)
-    end)
-end
-
--- ============================================================
--- QUEST ENGINE
--- ============================================================
 local function TalkNPC(npcName)
     local npc=FindNPC(npcName)
     if not npc then return false end
@@ -447,7 +482,6 @@ coroutine.wrap(function()
             local targetName = "All"
             if obj then
                 for k, _ in pairs(obj) do
-                    -- objective keys look like "Defeat Wild Cat Size" — strip "Defeat "
                     local stripped = k:gsub("^[Dd]efeat%s+", ""):gsub("^[Kk]ill%s+", "")
                     if stripped ~= "" then targetName = stripped end
                 end
@@ -456,10 +490,9 @@ coroutine.wrap(function()
             Notify("Quest", "Hunting: " .. targetName)
 
             local killed = 0
-            local needed = 3 -- fallback, most kill quests are 3
+            local needed = 3
 
             for attempt = 1, 40 do
-                -- search both Workspace and Players folder
                 local function findTargets(root)
                     for _, v in ipairs(root:GetDescendants()) do
                         if v:IsA("Model") and v ~= lp.Character then
@@ -472,32 +505,21 @@ coroutine.wrap(function()
                             local h = v:FindFirstChildOfClass("Humanoid")
                             local vr = v:FindFirstChild("HumanoidRootPart")
                             if h and h.Health > 0 and vr then
-                                -- match by target name or fallback to quest keywords
                                 local nameMatch = targetName == "All"
                                     or v.Name:lower():find(targetName:lower())
-                                    -- also try partial — "Wild Cat Size_10" matches "Wild Cat Size"
                                     or targetName:lower():find(v.Name:lower():gsub("_%d+$", ""))
                                 if nameMatch then
                                     local hrp = GetHRP()
                                     if hrp then
-                                        hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0, 2, 0))
+                                        hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0, 2, 0), vr.Position)
                                         task.wait(0.08)
                                     end
-                                    -- Fire damage remotes
                                     if Rem.MousePos then
                                         pcall(function() Rem.MousePos:FireServer(vr.Position) end)
                                     end
-                                    pcall(function() 
-                                        Rem.Combat:FireServer("Hit Character", v.Name, 1, 1, nil, false, nil, false, false, false, 1) 
-                                    end)
-                                    pcall(function()
-                                        task.spawn(function()
-                                            if Rem.CombatReturn then
-                                                Rem.CombatReturn:InvokeServer("HeavyAttack", v, vr.Position)
-                                            end
-                                        end)
-                                    end)
-                                    pcall(function() Rem.TrainingDummyHit:FireServer(v, 9999) end)
+                                    
+                                    -- Use Keybind Attack
+                                    FireAttack("Light")
                                     
                                     h.Health = 0
                                     pcall(function() h:TakeDamage(99999) end)
@@ -538,7 +560,7 @@ coroutine.wrap(function()
                     TPTo(ahrp.Position,2)
                     local h=agent:FindFirstChildOfClass("Humanoid")
                     if h then 
-                        pcall(function() Rem.Combat:FireServer("Hit Character", agent.Name, 1, 1, nil, false, nil, false, false, false, 1) end)
+                        FireAttack("Heavy")
                         h.Health = 0 
                     end
                 end
@@ -601,95 +623,98 @@ coroutine.wrap(function()
 end)()
 
 -- ============================================================
--- KILL AURA — Using the Real Combat Remote
+-- KILL AURA — TP on top + real attack inputs
 -- ============================================================
 local kaLast = 0
+local attackCycle = {"Light","Heavy","Skill1","Skill2","Skill3","EX"}
+local attackIdx = 1
+
 RunService.Heartbeat:Connect(function()
     if not Config.KillAura then return end
-    if os.clock() - kaLast < 0.1 then return end
+    if os.clock() - kaLast < 0.12 then return end
     kaLast = os.clock()
 
     local hrp = GetHRP()
     if not hrp then return end
 
-    for _, v in ipairs(Workspace:GetDescendants()) do
-        if v:IsA("Model") and v ~= lp.Character then
-            local h = v:FindFirstChildOfClass("Humanoid")
-            local vr = v:FindFirstChild("HumanoidRootPart")
-            if h and h.Health > 0 and vr then
-                if (vr.Position - hrp.Position).Magnitude <= Config.KillAuraRange then
-                    task.spawn(function()
-                        -- TP to the mob
-                        hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0, 2, 0))
-                        task.wait(0.05)
-                        
-                        -- Aim
-                        if Rem.MousePos then
-                            pcall(function() Rem.MousePos:FireServer(vr.Position) end)
-                        end
-                        
-                        -- THE REAL COMBAT REMOTE
-                        pcall(function() 
-                            Rem.Combat:FireServer("Hit Character", v.Name, 1, 1, nil, false, nil, false, false, false, 1) 
-                        end)
-                        
-                        -- Local visual write
-                        if Config.InstaKill then
-                            h.Health = 0
-                            pcall(function() h:TakeDamage(99999) end)
-                        else
-                            pcall(function() h:TakeDamage(30) end)
-                        end
-                    end)
-                end
+    local mobs = GetAllMobs("All", Workspace)
+    local mobsP = GetAllMobs("All", Players)
+    for _, v in ipairs(mobsP) do table.insert(mobs, v) end
+    table.sort(mobs, function(a,b) return a.dist < b.dist end)
+
+    for _, mob in ipairs(mobs) do
+        if mob.dist > Config.KillAuraRange then break end
+
+        task.spawn(function()
+            -- TP directly on top of mob and face it
+            hrp.CFrame = CFrame.new(
+                mob.hrp.Position + Vector3.new(0, 2, 0),
+                mob.hrp.Position
+            )
+            task.wait(0.05)
+
+            if Rem.MousePos then
+                pcall(function() Rem.MousePos:FireServer(mob.hrp.Position) end)
             end
-        end
+
+            local atk = attackCycle[attackIdx]
+            attackIdx = (attackIdx % #attackCycle) + 1
+            FireAttack(atk)
+
+            if Config.InstaKill then
+                mob.hum.Health = 0
+                pcall(function() mob.hum:TakeDamage(99999) end)
+            end
+        end)
     end
 end)
 
 -- ============================================================
--- MOB / BOSS FARM — Using the Real Combat Remote
+-- MOB / BOSS FARM — same attack engine
 -- ============================================================
 coroutine.wrap(function()
     while true do
-        task.wait(0.1)
+        task.wait(0.15)
         if not Config.BossFarm and not Config.MobFarm then continue end
-        local hrp = GetHRP(); if not hrp then continue end
+
         local target = GetNearestMob(Config.MobTarget)
-        if target then
-            local thrp = target:FindFirstChild("HumanoidRootPart")
-            if not thrp then continue end
-            
-            task.spawn(function()
-                hrp.CFrame = CFrame.new(thrp.Position + Vector3.new(0, 2, 0))
-                task.wait(0.05)
-                
-                local h = target:FindFirstChildOfClass("Humanoid")
-                if h and h.Health > 0 then
-                    if Rem.MousePos then
-                        pcall(function() Rem.MousePos:FireServer(thrp.Position) end)
-                    end
-                    
-                    -- THE REAL COMBAT REMOTE
-                    pcall(function() 
-                        Rem.Combat:FireServer("Hit Character", target.Name, 1, 1, nil, false, nil, false, false, false, 1) 
-                    end)
-                    
-                    if Config.InstaKill then
-                        h.Health = 0
-                        pcall(function() h:TakeDamage(99999) end)
-                    else
-                        pcall(function() h:TakeDamage(30) end)
-                    end
-                end
-            end)
-            
-            local myH = GetHum()
-            if myH and myH.Health < (myH.MaxHealth * Config.BackOffHP / 100) then
-                hrp.CFrame = CFrame.new(Config.FarmPosition + Vector3.new(0, 10, 0))
-            end
-        else
+        if not target then
             if Config.ServerHopNoBoss then ServerHop() end
+            continue
+        end
+
+        local thrp = target:FindFirstChild("HumanoidRootPart")
+        local h = target:FindFirstChildOfClass("Humanoid")
+        if not thrp or not h then continue end
+
+        local hrp = GetHRP()
+        if hrp then
+            hrp.CFrame = CFrame.new(
+                thrp.Position + Vector3.new(0, 2, 0),
+                thrp.Position
+            )
+        end
+        task.wait(0.05)
+
+        if Rem.MousePos then
+            pcall(function() Rem.MousePos:FireServer(thrp.Position) end)
+        end
+
+        local atk = attackCycle[attackIdx]
+        attackIdx = (attackIdx % #attackCycle) + 1
+        FireAttack(atk)
+
+        if Config.InstaKill then
+            h.Health = 0
+            pcall(function() h:TakeDamage(99999) end)
+        end
+
+        local myH = GetHum()
+        if myH and myH.Health < (myH.MaxHealth * Config.BackOffHP / 100) then
+            local hrp2 = GetHRP()
+            if hrp2 then
+                hrp2.CFrame = CFrame.new(Config.FarmPosition + Vector3.new(0, 10, 0))
+            end
         end
     end
 end)()
@@ -710,10 +735,9 @@ coroutine.wrap(function()
             pcall(function() Rem.MousePos:FireServer(aimPt) end)
         end
         
-        -- Fire Combat remote for skills (may need tweaking based on game updates)
-        pcall(function() 
-            Rem.Combat:FireServer("Hit Character", target.Name, 1, 1, nil, false, nil, false, false, false, 1) 
-        end)
+        local atk = attackCycle[skillIdx]
+        skillIdx = (skillIdx % #attackCycle) + 1
+        FireAttack(atk)
     end
 end)()
 
