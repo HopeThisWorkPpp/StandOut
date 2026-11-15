@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Adaptive Quest Engine v3)
+-- [AR-AI] Stand Out — Full Script (Adaptive Quest Engine v4)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -312,16 +312,23 @@ coroutine.wrap(function()
                     HoldPrompt("SecretBookshelfPrompt") 
                 end
             else
-                -- If we are here, the vault is open. Find the diamond.
-                Notify("Vault", "Door open. Looking for diamond...")
+                -- Door is open. Teleport to vault, then look for diamond.
+                Notify("Vault", "Door open. Teleporting to Vault to find diamond...")
+                TPTo(Vector3.new(2181.66, 27.55, 1502.78), 3)
+                task.wait(2.5)
+
                 local diamond = FindPartByName("Diamond") or FindPartByName("RohanDiamond")
                 if diamond then
                     local pos = diamond:IsA("Model") and diamond.PrimaryPart and diamond.PrimaryPart.Position or diamond.Position
                     if pos then 
+                        Notify("Vault", "Found Diamond! Collecting...")
                         TPTo(pos, 2) 
                         WaitFor(0.5)
                         pcall(function() Rem.Item:FireServer("Collect", diamond) end)
                     end
+                else
+                    -- Fallback if diamond model name is different, TP inside vault
+                    TPTo(Vector3.new(2181.66, 27.55, 1502.78), 2)
                 end
             end
 
