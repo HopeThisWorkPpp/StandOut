@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Combat Fixes Applied)
+-- [AR-AI] Stand Out — Full Script (Combat Remote Found)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -43,7 +43,8 @@ local Rem = {
     StandStorage      = getRemote(R, "StandStorage"),
     StandPresentation = getRemote(R, "StandPresentation"),
     Open              = getRemote(SR, "Open"),
-    CombatReturn      = getRemote(R, "CombatReturn"), -- RemoteFunction
+    Combat            = getRemote(R, "Combat"),         -- THE REAL COMBAT REMOTE
+    CombatReturn      = getRemote(R, "CombatReturn"),   -- Kept just in case
     ProjectileAim     = getRemote(R, "ProjectileAim"),
     TrainingDummyHit  = getRemote(R, "TrainingDummyHit"),
     BarrageCancel     = getRemote(R, "BarrageCancel"),
@@ -341,7 +342,7 @@ coroutine.wrap(function()
             print("[AI] Active: " .. active .. " | Target: Loading...")
         end
 
-        -- 1. Rohan Vault Story (Secret Bookshelf → Vault → Diamond)
+        -- 1. Rohan Vault Story
         if active == "P9_03_STEAL_FROM_ROHAN_VAULT" then
             Notify("Vault","Step 1: Pulling bookshelf...")
             local bookshelf
@@ -361,8 +362,6 @@ coroutine.wrap(function()
                 end)
                 Notify("Vault","Bookshelf pulled.")
                 task.wait(2)
-            else
-                Notify("Vault","Bookshelf not found/already pulled.")
             end
 
             Notify("Vault","Step 2: Cracking vault...")
@@ -383,8 +382,6 @@ coroutine.wrap(function()
                 end)
                 Notify("Vault","Vault cracked!")
                 task.wait(2)
-            else
-                Notify("Vault","Vault prompt not found/already done.")
             end
 
             Notify("Vault","Step 3: Picking up diamond...")
@@ -417,7 +414,6 @@ coroutine.wrap(function()
                 end
                 task.wait(1)
             end
-
             Notify("Vault","Vault sequence complete.")
             task.wait(5)
 
@@ -444,6 +440,8 @@ coroutine.wrap(function()
                                 hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0,2,0))
                                 task.wait(0.1)
                             end
+                            -- Fire the real combat remote
+                            pcall(function() Rem.Combat:FireServer("Hit Character", v.Name, 1, 1, nil, false, nil, false, false, false, 1) end)
                             h.Health = 0
                             pcall(function() h:TakeDamage(99999) end)
                             killed = killed + 1
@@ -475,8 +473,10 @@ coroutine.wrap(function()
                 if ahrp then
                     TPTo(ahrp.Position,2)
                     local h=agent:FindFirstChildOfClass("Humanoid")
-                    if h then h.Health=0 end
-                    pcall(function() task.spawn(function() Rem.CombatReturn:InvokeServer("HeavyAttack",agent,ahrp.Position) end) end)
+                    if h then 
+                        pcall(function() Rem.Combat:FireServer("Hit Character", agent.Name, 1, 1, nil, false, nil, false, false, false, 1) end)
+                        h.Health = 0 
+                    end
                 end
             end
         end
@@ -537,12 +537,12 @@ coroutine.wrap(function()
 end)()
 
 -- ============================================================
--- KILL AURA — Claude's Fixes (TP Sync + task.spawn)
+-- KILL AURA — Using the Real Combat Remote
 -- ============================================================
 local kaLast = 0
 RunService.Heartbeat:Connect(function()
     if not Config.KillAura then return end
-    if os.clock() - kaLast < 0.08 then return end
+    if os.clock() - kaLast < 0.1 then return end
     kaLast = os.clock()
 
     local hrp = GetHRP()
@@ -555,21 +555,24 @@ RunService.Heartbeat:Connect(function()
             if h and h.Health > 0 and vr then
                 if (vr.Position - hrp.Position).Magnitude <= Config.KillAuraRange then
                     task.spawn(function()
+                        -- TP to the mob
                         hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0, 2, 0))
                         task.wait(0.05)
                         
+                        -- Aim
                         if Rem.MousePos then
                             pcall(function() Rem.MousePos:FireServer(vr.Position) end)
                         end
-                        pcall(function()
-                            task.spawn(function()
-                                Rem.CombatReturn:InvokeServer("HeavyAttack", v, vr.Position)
-                            end)
-                        end)
-                        pcall(function() Rem.TrainingDummyHit:FireServer(v, 9999) end)
                         
+                        -- THE REAL COMBAT REMOTE
+                        pcall(function() 
+                            Rem.Combat:FireServer("Hit Character", v.Name, 1, 1, nil, false, nil, false, false, false, 1) 
+                        end)
+                        
+                        -- Local visual write
                         if Config.InstaKill then
                             h.Health = 0
+                            pcall(function() h:TakeDamage(99999) end)
                         else
                             pcall(function() h:TakeDamage(30) end)
                         end
@@ -581,7 +584,7 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ============================================================
--- MOB / BOSS FARM — Claude's Fixes
+-- MOB / BOSS FARM — Using the Real Combat Remote
 -- ============================================================
 coroutine.wrap(function()
     while true do
@@ -602,15 +605,15 @@ coroutine.wrap(function()
                     if Rem.MousePos then
                         pcall(function() Rem.MousePos:FireServer(thrp.Position) end)
                     end
-                    pcall(function()
-                        task.spawn(function()
-                            Rem.CombatReturn:InvokeServer("HeavyAttack", target, thrp.Position)
-                        end)
+                    
+                    -- THE REAL COMBAT REMOTE
+                    pcall(function() 
+                        Rem.Combat:FireServer("Hit Character", target.Name, 1, 1, nil, false, nil, false, false, false, 1) 
                     end)
-                    pcall(function() Rem.TrainingDummyHit:FireServer(target, 9999) end)
-
+                    
                     if Config.InstaKill then
                         h.Health = 0
+                        pcall(function() h:TakeDamage(99999) end)
                     else
                         pcall(function() h:TakeDamage(30) end)
                     end
@@ -638,16 +641,14 @@ coroutine.wrap(function()
         local target=GetNearestMob("All"); if not target then continue end
         local thrp=target:FindFirstChild("HumanoidRootPart"); if not thrp then continue end
         local aimPt=(Config.AimAtHead and target:FindFirstChild("Head") or thrp).Position
-        local skills={"Skill1","Skill2","Skill3","Skill4","StandBarrage"}
-        local sk=skills[skillIdx]; skillIdx=(skillIdx%#skills)+1
         
         if Rem.MousePos then
             pcall(function() Rem.MousePos:FireServer(aimPt) end)
         end
-        pcall(function()
-            task.spawn(function()
-                Rem.CombatReturn:InvokeServer(sk,target,aimPt)
-            end)
+        
+        -- Fire Combat remote for skills (may need tweaking based on game updates)
+        pcall(function() 
+            Rem.Combat:FireServer("Hit Character", target.Name, 1, 1, nil, false, nil, false, false, false, 1) 
         end)
     end
 end)()
