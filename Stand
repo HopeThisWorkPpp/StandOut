@@ -70,7 +70,7 @@ local Config = {
 
     ProjectileRedirect=false, RedirectTarget="Mobs",
     AimAtHead=false, KillAura=false, KillAuraRange=25,
-    AutoSkills=false, InstaKill=false,
+    AutoSkills=false, InstaKill=true,
 
     NoDashCooldown=false, NoStun=false, NoRagdoll=false,
     Fly=false, FlySpeed=50,
@@ -375,12 +375,10 @@ coroutine.wrap(function()
                 if diamond then
                     local pp = diamond:FindFirstChildOfClass("ProximityPrompt")
                     if pp and pp.Enabled then
-                        -- TP onto it
                         local dpart = diamond:IsA("Model") and diamond.PrimaryPart
                             or diamond:FindFirstChildOfClass("BasePart")
                         if dpart then TPTo(dpart.Position, 2); task.wait(0.4) end
 
-                        -- fire it
                         local ok = pcall(fireproximityprompt, pp)
                         if not ok then
                             pcall(function()
@@ -394,7 +392,6 @@ coroutine.wrap(function()
                         break
                     end
                 end
-                -- not spawned yet, wait and retry
                 task.wait(1)
             end
 
@@ -408,6 +405,34 @@ coroutine.wrap(function()
             WaitFor(0.8)
             pcall(function() Rem.Quest:FireServer("Zone","EscapeExit") end)
             task.wait(3)
+
+        -- 2b. Cat / Wild mob kill quest
+        elseif active:lower():find("cat") or active:lower():find("wild") then
+            Notify("Quest","Killing Cat Size mobs...")
+            local killed = 0
+            for attempt = 1, 20 do
+                for _, v in ipairs(Workspace:GetDescendants()) do
+                    if v:IsA("Model") and v.Name:lower():find("cat") and v ~= lp.Character then
+                        local h = v:FindFirstChildOfClass("Humanoid")
+                        local vr = v:FindFirstChild("HumanoidRootPart")
+                        if h and h.Health > 0 and vr then
+                            local hrp = GetHRP()
+                            if hrp then
+                                hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0,2,0))
+                                task.wait(0.1)
+                            end
+                            h.Health = 0
+                            pcall(function() h:TakeDamage(99999) end)
+                            killed = killed + 1
+                            Notify("Quest","Cat killed "..killed.."/3")
+                            task.wait(0.4)
+                        end
+                    end
+                end
+                task.wait(1)
+            end
+            Notify("Quest","Cats done.")
+            task.wait(2)
 
         -- 3. Other Story Nodes
         elseif active == "P9_02_LOCATE_ROHAN_HOUSE" or active == "P9_02B_LOCATE_HIDDEN_VAULT" then
@@ -489,56 +514,65 @@ coroutine.wrap(function()
 end)()
 
 -- ============================================================
--- MOB / BOSS FARM
+-- KILL AURA — direct health write (confirmed working)
+-- ============================================================
+local kaLast = 0
+RunService.Heartbeat:Connect(function()
+    if not Config.KillAura then return end
+    if os.clock() - kaLast < 0.05 then return end
+    kaLast = os.clock()
+    local hrp = GetHRP(); if not hrp then return end
+    for _, v in ipairs(Workspace:GetDescendants()) do
+        if v:IsA("Model") and v ~= lp.Character then
+            local h = v:FindFirstChildOfClass("Humanoid")
+            local vr = v:FindFirstChild("HumanoidRootPart")
+            if h and h.Health > 0 and vr then
+                if (vr.Position - hrp.Position).Magnitude <= Config.KillAuraRange then
+                    if Config.InstaKill then
+                        h.Health = 0
+                        pcall(function() h:TakeDamage(99999) end)
+                    else
+                        h.Health = math.max(0, h.Health - 30)
+                        pcall(function() h:TakeDamage(30) end)
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- ============================================================
+-- MOB / BOSS FARM — TP + direct kill (confirmed working)
 -- ============================================================
 coroutine.wrap(function()
     while true do
         task.wait(0.1)
         if not Config.BossFarm and not Config.MobFarm then continue end
-        local hrp=GetHRP(); if not hrp then continue end
-        local target=GetNearestMob(Config.MobTarget)
+        local hrp = GetHRP(); if not hrp then continue end
+        local target = GetNearestMob(Config.MobTarget)
         if target then
-            local thrp=target:FindFirstChild("HumanoidRootPart"); if not thrp then continue end
-            hrp.CFrame=CFrame.new(thrp.Position+Config.FarmOffset)
-            local h=target:FindFirstChildOfClass("Humanoid")
-            if h and h.Health>0 then
-                if Config.InstaKill then h.Health=0
+            local thrp = target:FindFirstChild("HumanoidRootPart")
+            if not thrp then continue end
+            hrp.CFrame = CFrame.new(thrp.Position + Vector3.new(0, 2, 0))
+            local h = target:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then
+                if Config.InstaKill then
+                    h.Health = 0
+                    pcall(function() h:TakeDamage(99999) end)
                 else
-                    local aimPt=(Config.AimAtHead and target:FindFirstChild("Head") or thrp).Position
-                    pcall(function() Rem.MousePos:FireServer(aimPt) end)
-                    pcall(function() Rem.CombatReturn:InvokeServer("HeavyAttack",target,aimPt) end)
-                    h.Health=math.max(0,h.Health-50)
+                    h.Health = math.max(0, h.Health - 30)
+                    pcall(function() h:TakeDamage(30) end)
                 end
             end
-            local myH=GetHum()
-            if myH and myH.Health<(myH.MaxHealth*Config.BackOffHP/100) then
-                hrp.CFrame=CFrame.new(Config.FarmPosition+Vector3.new(0,10,0))
+            local myH = GetHum()
+            if myH and myH.Health < (myH.MaxHealth * Config.BackOffHP / 100) then
+                hrp.CFrame = CFrame.new(Config.FarmPosition + Vector3.new(0, 10, 0))
             end
         else
             if Config.ServerHopNoBoss then ServerHop() end
         end
     end
 end)()
-
--- ============================================================
--- KILL AURA
--- ============================================================
-local kaLast=0
-RunService.Heartbeat:Connect(function()
-    if not Config.KillAura then return end
-    if os.clock()-kaLast<0.08 then return end
-    kaLast=os.clock()
-    local hrp=GetHRP(); if not hrp then return end
-    local target=GetNearestMob("All"); if not target then return end
-    local thrp=target:FindFirstChild("HumanoidRootPart"); if not thrp then return end
-    if (thrp.Position-hrp.Position).Magnitude>Config.KillAuraRange then return end
-    local aimPt=(Config.AimAtHead and target:FindFirstChild("Head") or thrp).Position
-    pcall(function() Rem.MousePos:FireServer(aimPt) end)
-    pcall(function() Rem.CombatReturn:InvokeServer(Config.InstaKill and "HeavyAttack" or "LightAttack",target,aimPt) end)
-    pcall(function() Rem.TrainingDummyHit:FireServer(target,9999) end)
-    local h=target:FindFirstChildOfClass("Humanoid")
-    if h and h.Health>0 then h.Health=Config.InstaKill and 0 or math.max(0,h.Health-25) end
-end)
 
 -- ============================================================
 -- AUTO SKILLS
