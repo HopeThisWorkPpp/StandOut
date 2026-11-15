@@ -363,39 +363,43 @@ coroutine.wrap(function()
                 Notify("Vault","Vault prompt not found/already done.")
             end
 
-            -- Step 3: grab diamond + any dropped items nearby
-            Notify("Vault","Step 3: Collecting diamond...")
-            task.wait(1)
-            for _, v in ipairs(Workspace:GetDescendants()) do
-                if v:IsA("ProximityPrompt") and v.Name == "WorldItemPickup" and v.Enabled then
-                    local ipart = v.Parent
-                    while ipart and not ipart:IsA("BasePart") do ipart = ipart.Parent end
-                    if ipart then
-                        local hrp = GetHRP()
-                        if hrp and (ipart.Position - hrp.Position).Magnitude < 100 then
-                            TPTo(ipart.Position, 2); task.wait(0.3)
+            -- Step 3: pick up DroppedRohanDiamond
+            Notify("Vault","Step 3: Picking up diamond...")
+            task.wait(1.5)
+
+            for attempt = 1, 8 do
+                local diamond = Workspace:FindFirstChild("Game")
+                    and Workspace.Game:FindFirstChild("Effects")
+                    and Workspace.Game.Effects:FindFirstChild("DroppedRohanDiamond")
+
+                if diamond then
+                    local pp = diamond:FindFirstChildOfClass("ProximityPrompt")
+                    if pp and pp.Enabled then
+                        -- TP onto it
+                        local dpart = diamond:IsA("Model") and diamond.PrimaryPart
+                            or diamond:FindFirstChildOfClass("BasePart")
+                        if dpart then TPTo(dpart.Position, 2); task.wait(0.4) end
+
+                        -- fire it
+                        local ok = pcall(fireproximityprompt, pp)
+                        if not ok then
                             pcall(function()
-                                v:InputHoldBegin()
-                                task.wait(v.HoldDuration + 0.1)
-                                v:InputHoldEnd()
+                                pp:InputHoldBegin()
+                                task.wait(pp.HoldDuration + 0.2)
+                                pp:InputHoldEnd()
                             end)
-                            task.wait(0.3)
                         end
+                        Notify("Vault","Diamond picked up!")
+                        task.wait(0.5)
+                        break
                     end
                 end
+                -- not spawned yet, wait and retry
+                task.wait(1)
             end
 
-            local diamond = FindPartByName("Diamond") or FindPartByName("RohanDiamond")
-                or FindPartByName("Jewel") or FindPartByName("BlueDiamond")
-            if diamond then
-                local dpos = diamond:IsA("Model") and diamond.PrimaryPart and diamond.PrimaryPart.Position
-                          or (diamond:IsA("BasePart") and diamond.Position)
-                if dpos then TPTo(dpos, 2); task.wait(0.3) end
-                pcall(function() Rem.Item:FireServer("Collect", diamond) end)
-                pcall(function() Rem.Quest:FireServer("Interact", diamond.Name, diamond) end)
-            end
             Notify("Vault","Vault sequence complete.")
-            task.wait(5) -- cooldown before retry
+            task.wait(5)
 
         -- 2. Escaping Rohan House
         elseif active == "P9_04_ESCAPE_ROHAN_HOUSE" then
