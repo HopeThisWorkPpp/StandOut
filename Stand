@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Fixed Cat Handler + Mob Scan)
+-- [AR-AI] Stand Out — Full Script (Universal Mob Search + Kill Quests)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -185,23 +185,38 @@ local function FindNPC(name)
     end
 end
 
+-- ============================================================
+-- UNIVERSAL MOB SEARCH (checks Workspace AND Players folder)
+-- ============================================================
 local function GetNearestMob(tag)
-    local hrp=GetHRP(); if not hrp then return nil end
-    local best,bestD=nil,math.huge
-    local Game=Workspace:FindFirstChild("Game")
-    local searchRoot = Game or Workspace
-    for _,v in ipairs(searchRoot:GetDescendants()) do
-        if v:IsA("Model") and v~=lp.Character then
-            local h=v:FindFirstChildOfClass("Humanoid")
-            local vr=v:FindFirstChild("HumanoidRootPart")
-            if h and h.Health>0 and vr then
-                if tag=="All" or v.Name:lower():find(tag:lower()) then
-                    local d=(vr.Position-hrp.Position).Magnitude
-                    if d<bestD then bestD=d;best=v end
+    local hrp = GetHRP()
+    if not hrp then return nil end
+    local best, bestD = nil, math.huge
+
+    local function searchIn(root)
+        for _, v in ipairs(root:GetDescendants()) do
+            if v:IsA("Model") and v ~= lp.Character then
+                -- skip actual player characters
+                local isPlayer = false
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p.Character == v then isPlayer = true; break end
+                end
+                if isPlayer then continue end
+
+                local h = v:FindFirstChildOfClass("Humanoid")
+                local vr = v:FindFirstChild("HumanoidRootPart")
+                if h and h.Health > 0 and vr then
+                    if tag == "All" or v.Name:lower():find(tag:lower()) then
+                        local d = (vr.Position - hrp.Position).Magnitude
+                        if d < bestD then bestD = d; best = v end
+                    end
                 end
             end
         end
     end
+
+    searchIn(Workspace)
+    searchIn(Players) -- Stand Out spawns mob clones here
     return best
 end
 
@@ -342,15 +357,6 @@ coroutine.wrap(function()
             print("[AI] Active: " .. active .. " | Target: Loading...")
         end
 
-        -- Debug: print all models in workspace that could be cats
-        if active == "P9_05_FIGHT_JUNGLE_CATS" then
-            for _, v in ipairs(Workspace:GetDescendants()) do
-                if v:IsA("Model") and v:FindFirstChildOfClass("Humanoid") then
-                    print("[MOB SCAN] " .. v.Name)
-                end
-            end
-        end
-
         -- 1. Rohan Vault Story
         if active == "P9_03_STEAL_FROM_ROHAN_VAULT" then
             Notify("Vault","Step 1: Pulling bookshelf...")
@@ -434,58 +440,83 @@ coroutine.wrap(function()
             pcall(function() Rem.Quest:FireServer("Zone","EscapeExit") end)
             task.wait(3)
 
-        -- 2b. Cat / Wild mob kill quest (UPDATED)
-        elseif active:lower():find("cat") or active:lower():find("wild") then
-            Notify("Quest", "Hunting Wild Cat Size mobs...")
+        -- Universal kill quest handler
+        elseif active:lower():find("fight") or active:lower():find("defeat") or active:lower():find("kill") then
+            -- parse target name from objectives
+            local obj = GetQuestObjectives()
+            local targetName = "All"
+            if obj then
+                for k, _ in pairs(obj) do
+                    -- objective keys look like "Defeat Wild Cat Size" — strip "Defeat "
+                    local stripped = k:gsub("^[Dd]efeat%s+", ""):gsub("^[Kk]ill%s+", "")
+                    if stripped ~= "" then targetName = stripped end
+                end
+            end
+            print("[AR-AI] Kill quest target resolved: '" .. targetName .. "'")
+            Notify("Quest", "Hunting: " .. targetName)
+
             local killed = 0
-            local needed = 3
-            
-            for attempt = 1, 30 do
-                -- Search ALL of workspace, not just Game folder
-                for _, v in ipairs(Workspace:GetDescendants()) do
-                    if v:IsA("Model") and v ~= lp.Character then
-                        -- Match "Wild Cat Size" or any cat variant
-                        if v.Name:lower():find("cat") or v.Name:lower():find("wild") then
+            local needed = 3 -- fallback, most kill quests are 3
+
+            for attempt = 1, 40 do
+                -- search both Workspace and Players folder
+                local function findTargets(root)
+                    for _, v in ipairs(root:GetDescendants()) do
+                        if v:IsA("Model") and v ~= lp.Character then
+                            local isPlayer = false
+                            for _, p in ipairs(Players:GetPlayers()) do
+                                if p.Character == v then isPlayer = true; break end
+                            end
+                            if isPlayer then continue end
+
                             local h = v:FindFirstChildOfClass("Humanoid")
                             local vr = v:FindFirstChild("HumanoidRootPart")
                             if h and h.Health > 0 and vr then
-                                local hrp = GetHRP()
-                                if hrp then
-                                    -- TP close enough for server to register
-                                    hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0, 2, 0))
-                                    task.wait(0.08)
-                                end
-                                -- Fire damage remotes
-                                if Rem.MousePos then
-                                    pcall(function() Rem.MousePos:FireServer(vr.Position) end)
-                                end
-                                pcall(function() 
-                                    Rem.Combat:FireServer("Hit Character", v.Name, 1, 1, nil, false, nil, false, false, false, 1) 
-                                end)
-                                pcall(function()
-                                    task.spawn(function()
-                                        if Rem.CombatReturn then
-                                            Rem.CombatReturn:InvokeServer("HeavyAttack", v, vr.Position)
-                                        end
+                                -- match by target name or fallback to quest keywords
+                                local nameMatch = targetName == "All"
+                                    or v.Name:lower():find(targetName:lower())
+                                    -- also try partial — "Wild Cat Size_10" matches "Wild Cat Size"
+                                    or targetName:lower():find(v.Name:lower():gsub("_%d+$", ""))
+                                if nameMatch then
+                                    local hrp = GetHRP()
+                                    if hrp then
+                                        hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0, 2, 0))
+                                        task.wait(0.08)
+                                    end
+                                    -- Fire damage remotes
+                                    if Rem.MousePos then
+                                        pcall(function() Rem.MousePos:FireServer(vr.Position) end)
+                                    end
+                                    pcall(function() 
+                                        Rem.Combat:FireServer("Hit Character", v.Name, 1, 1, nil, false, nil, false, false, false, 1) 
                                     end)
-                                end)
-                                pcall(function() Rem.TrainingDummyHit:FireServer(v, 9999) end)
-                                -- Local kill
-                                h.Health = 0
-                                pcall(function() h:TakeDamage(99999) end)
-                                killed = killed + 1
-                                Notify("Quest", "Cat killed " .. killed .. "/" .. needed)
-                                task.wait(0.5)
-                                if killed >= needed then break end
+                                    pcall(function()
+                                        task.spawn(function()
+                                            if Rem.CombatReturn then
+                                                Rem.CombatReturn:InvokeServer("HeavyAttack", v, vr.Position)
+                                            end
+                                        end)
+                                    end)
+                                    pcall(function() Rem.TrainingDummyHit:FireServer(v, 9999) end)
+                                    
+                                    h.Health = 0
+                                    pcall(function() h:TakeDamage(99999) end)
+                                    killed = killed + 1
+                                    Notify("Quest", "Killed " .. killed)
+                                    print("[AR-AI] Killed: " .. v.Name .. " (" .. killed .. ")")
+                                    task.wait(0.4)
+                                end
                             end
                         end
                     end
                 end
-                if killed >= needed then break end
-                task.wait(1)
+
+                findTargets(Workspace)
+                findTargets(Players)
+                task.wait(0.8)
             end
-            
-            Notify("Quest", "Cat hunt done — " .. killed .. " killed.")
+
+            Notify("Quest", "Kill quest done — " .. killed .. " killed.")
             task.wait(3)
 
         -- 3. Other Story Nodes
