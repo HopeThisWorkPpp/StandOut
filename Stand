@@ -282,7 +282,9 @@ end
 -- ============================================================
 -- ADAPTIVE QUEST LOOP
 -- ============================================================
-local lastObjective=""
+local lastQuest = ""
+local lastObjective = ""
+
 coroutine.wrap(function()
     while true do
         task.wait(2)
@@ -299,79 +301,67 @@ coroutine.wrap(function()
             end
         end
 
-        -- 1. Rohan Vault Story
-        if active == "P9_03_STEAL_FROM_ROHAN_VAULT" then
-            if objectives and objectives["Interact_RohanVault"] then
-                -- Still need to open door
-                if objString ~= lastObjective then
-                    Notify("Auto Quest", "Opening vault...")
-                    lastObjective = objString
-                    TPTo(Vector3.new(2181.66, 27.55, 1502.78), 3)
-                    task.wait(2.5)
+        -- Log the current state to the console so we know it's reading
+        print("[AI] Quest: "..active.." | Objectives: "..(objString ~= "" and objString or "None"))
+        
+        -- Only trigger if the quest changed OR the objective string changed
+        if active ~= lastQuest or objString ~= lastObjective then
+            lastQuest = active
+            lastObjective = objString
+            Notify("Auto Quest", "Detected: " .. (objString ~= "" and objString or active))
+
+            -- 1. Rohan Vault Story
+            if active == "P9_03_STEAL_FROM_ROHAN_VAULT" then
+                Notify("Vault", "Teleporting to Rohan House...")
+                TPTo(Vector3.new(2181.66, 27.55, 1502.78), 3)
+                task.wait(2.5)
+                
+                -- Check if we are supposed to interact with the vault
+                if objectives and objectives["Interact_RohanVault"] then
                     if not HoldPrompt("RohanVaultPrompt") then
                         HoldPrompt("SecretBookshelfPrompt") 
                     end
-                end
-            else
-                -- Door is open, objective changed. Find Diamond.
-                if objString ~= lastObjective then
-                    Notify("Auto Quest", "Vault open! Looking for diamond...")
-                    lastObjective = objString
-                end
-                
-                local diamond = FindPartByName("Diamond") or FindPartByName("RohanDiamond")
-                if diamond then
-                    local pos = diamond:IsA("Model") and diamond.PrimaryPart and diamond.PrimaryPart.Position or diamond.Position
-                    if pos then 
-                        TPTo(pos, 2) 
-                        WaitFor(0.5)
-                        -- Simulate touch pickup
-                        pcall(function() Rem.Item:FireServer("Collect", diamond) end)
+                else
+                    -- If no objective is listed but quest is active, we might need the diamond
+                    local diamond = FindPartByName("Diamond") or FindPartByName("RohanDiamond")
+                    if diamond then
+                        local pos = diamond:IsA("Model") and diamond.PrimaryPart and diamond.PrimaryPart.Position or diamond.Position
+                        if pos then 
+                            TPTo(pos, 2) 
+                            WaitFor(0.5)
+                            pcall(function() Rem.Item:FireServer("Collect", diamond) end)
+                        end
                     end
                 end
-            end
 
-        -- 2. Escaping Rohan House
-        elseif active == "P9_04_ESCAPE_ROHAN_HOUSE" then
-            if objString ~= lastObjective then
+            -- 2. Escaping Rohan House
+            elseif active == "P9_04_ESCAPE_ROHAN_HOUSE" then
                 Notify("Auto Quest", "Escaping Rohan House...")
-                lastObjective = objString
                 TPTo(Vector3.new(1556.39,33.47,1529.06), 3)
                 WaitFor(0.8)
                 pcall(function() Rem.Quest:FireServer("Zone","EscapeExit") end)
-            end
 
-        -- 3. Other Story Nodes
-        elseif active == "P9_02_LOCATE_ROHAN_HOUSE" or active == "P9_02B_LOCATE_HIDDEN_VAULT" then
-            if objString ~= lastObjective then
-                lastObjective = objString
+            -- 3. Other Story Nodes
+            elseif active == "P9_02_LOCATE_ROHAN_HOUSE" or active == "P9_02B_LOCATE_HIDDEN_VAULT" then
                 TPTo(Vector3.new(2181.66,27.55,1502.78), 3); WaitFor(1.5); TalkNPC("Rohan Kishibe")
-            end
-        elseif active == "P9_01_MEET_MERYL" then
-            if objString ~= lastObjective then
-                lastObjective = objString; TalkNPC("Meryl Mei Qi")
-            end
-        elseif active == "P9_01B_TAKE_HUBER" then
-            if objString ~= lastObjective then
-                lastObjective = objString; TalkNPC("Meryl Mei Qi"); WaitFor(0.3); SimInteract("DiamotchFloorWatch")
-            end
-        elseif active == "TUTORIAL_MEET_JODIO" then
-            if objString ~= lastObjective then
-                lastObjective = objString; TalkNPC("TutorialJodio")
-            end
-        elseif active == "TUTORIAL_FIND_ARROW" then
-            if objString ~= lastObjective then
-                lastObjective = objString; SimInteract("TutorialArrowSand")
-            end
-        elseif active == "DEFEAT_AGENT" then
-            local agent = FindNPC("AlyoshaDichter")
-            if agent then
-                local ahrp=agent:FindFirstChild("HumanoidRootPart")
-                if ahrp then
-                    TPTo(ahrp.Position,2)
-                    local h=agent:FindFirstChildOfClass("Humanoid")
-                    if h then h.Health=0 end
-                    pcall(function() Rem.CombatReturn:InvokeServer("HeavyAttack",agent,ahrp.Position) end)
+            elseif active == "P9_01_MEET_MERYL" then
+                TalkNPC("Meryl Mei Qi")
+            elseif active == "P9_01B_TAKE_HUBER" then
+                TalkNPC("Meryl Mei Qi"); WaitFor(0.3); SimInteract("DiamotchFloorWatch")
+            elseif active == "TUTORIAL_MEET_JODIO" then
+                TalkNPC("TutorialJodio")
+            elseif active == "TUTORIAL_FIND_ARROW" then
+                SimInteract("TutorialArrowSand")
+            elseif active == "DEFEAT_AGENT" then
+                local agent = FindNPC("AlyoshaDichter")
+                if agent then
+                    local ahrp=agent:FindFirstChild("HumanoidRootPart")
+                    if ahrp then
+                        TPTo(ahrp.Position,2)
+                        local h=agent:FindFirstChildOfClass("Humanoid")
+                        if h then h.Health=0 end
+                        pcall(function() Rem.CombatReturn:InvokeServer("HeavyAttack",agent,ahrp.Position) end)
+                    end
                 end
             end
         end
@@ -815,13 +805,11 @@ Players.PlayerRemoving:Connect(function(p)
     end
 end)
 
--- ToClient listener
 Rem.ToClient.OnClientEvent:Connect(function(action,data)
     if Config.EventNotifier then Notify("Event: "..tostring(action),tostring(data)) end
     if Config.WebhookEvents then SendWebhook("Event: "..tostring(action),tostring(data)) end
 end)
 
--- Nearby alert
 local alertCD=0
 RunService.Heartbeat:Connect(function()
     if not Config.NearbyAlert then return end
