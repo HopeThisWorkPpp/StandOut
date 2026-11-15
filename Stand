@@ -1,0 +1,1203 @@
+-- [AR-AI] Stand Out — Patched with real remotes
+-- fraughting, illgeallycrime, Ar0
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local CoreGui = game:GetService("CoreGui")
+local StarterGui = game:GetService("StarterGui")
+local Lighting = game:GetService("Lighting")
+
+local lp = Players.LocalPlayer
+local cam = Workspace.CurrentCamera
+local mouse = lp:GetMouse()
+
+-- ============================================================
+-- REMOTES (real paths from dump)
+-- ============================================================
+local R = ReplicatedStorage.Remotes
+local SR = ReplicatedStorage.StandOutCustomization.Remotes
+
+local Remotes = {
+    -- Stand / Roll
+    StandRoll        = SR:WaitForChild("StandRoll"),        -- RemoteFunction
+    CosmeticRoll     = R:WaitForChild("CosmeticRoll"),      -- RemoteFunction
+    Standify         = R:WaitForChild("Standify"),          -- RemoteEvent  (use stand)
+    StandFollow      = R:WaitForChild("StandFollow"),       -- RemoteEvent  (pilot/follow)
+    StandStorage     = R:WaitForChild("StandStorage"),      -- RemoteEvent  (store/retrieve stand)
+    StandPresentation= R:WaitForChild("StandPresentation"), -- RemoteEvent  (show stand)
+    StandPalettes    = R:WaitForChild("StandPalettes"),     -- RemoteEvent  (stand colours)
+    Open             = SR:WaitForChild("Open"),             -- RemoteEvent  (open customization)
+
+    -- Combat
+    ProjectileAim    = R:WaitForChild("ProjectileAim"),     -- RemoteEvent  (aim redirect)
+    WalkingHeartImpaleAim = R:WaitForChild("WalkingHeartImpaleAim"), -- RemoteEvent
+    BarrageCancel    = R:WaitForChild("BarrageCancel"),     -- RemoteEvent
+    TrainingDummyHit = R:WaitForChild("TrainingDummyHit"),  -- RemoteEvent
+    CombatReturn     = R:WaitForChild("CombatReturn"),      -- RemoteFunction
+
+    -- Quest / Bounty / World
+    Quest            = R:WaitForChild("Quest"),             -- RemoteEvent
+    FateQuest        = R:WaitForChild("FateQuest"),         -- RemoteEvent
+    MajorTomQuest    = R:WaitForChild("MajorTomQuest"),     -- RemoteEvent
+    MuseumQuest      = R:WaitForChild("MuseumQuest"),       -- RemoteEvent
+    Bounty           = R:WaitForChild("Bounty"),            -- RemoteEvent
+    PlayerBounties   = R:WaitForChild("PlayerBounties"),    -- RemoteEvent
+    WorldEvents      = R:WaitForChild("WorldEvents"),       -- RemoteEvent
+    TrainRaid        = R:WaitForChild("TrainRaid"),         -- RemoteEvent
+
+    -- Item / Craft
+    Item             = R:WaitForChild("Item"),              -- RemoteEvent
+    Craft            = R:WaitForChild("Craft"),             -- RemoteEvent
+    GiftItem         = R:WaitForChild("GiftItem"),          -- RemoteEvent
+    ArrowSupporter   = R:WaitForChild("ArrowSupporter"),    -- RemoteEvent  (arrow use/roll)
+    ClaimReward      = R:WaitForChild("ClaimReward"),       -- RemoteFunction
+
+    -- Data
+    Data             = R:WaitForChild("Data"),              -- RemoteFunction
+    Cards            = R:WaitForChild("Cards"),             -- RemoteFunction
+
+    -- Menu / UI
+    Menu             = R:WaitForChild("Menu"),              -- RemoteEvent
+    Dialogue         = R:WaitForChild("Dialogue"),          -- RemoteEvent
+    ToClient         = R:WaitForChild("ToClient"),          -- RemoteEvent (server→client events)
+
+    -- Server
+    ServerDirectory  = R:WaitForChild("ServerDirectory"),   -- RemoteEvent
+    AfkRejoin        = R:WaitForChild("AfkRejoin"),         -- RemoteEvent
+
+    -- Mouse sync
+    MousePos         = ReplicatedStorage.Modules.Utility:WaitForChild("MousePositionServerRemote"),
+}
+
+-- ============================================================
+-- CONFIG
+-- ============================================================
+local Config = {
+    -- FARM
+    BossFarm         = false,
+    MobFarm          = false,
+    MobTarget        = "All",
+    StoryFarm        = false,
+    SideQuestFarm    = false,
+    BountyFarm       = false,
+    ItemFarm         = false,
+    CheckArrowSpots  = false,
+    ServerHopNoBoss  = false,
+
+    -- ROLL
+    AutoRoll         = false,
+    WantedStands     = {},          -- fill with names e.g. {"Star Platinum","The World"}
+    KeepLegendaryPlus= true,
+    ArrowType        = "Normal",    -- Normal / Mysterious / Rib (sent as arg to ArrowSupporter)
+
+    -- STAND
+    InfinitePilotRange  = false,
+    AttachStand         = false,
+    AutoPilot           = false,
+    AttackWhileAttached = false,
+    AutoStats           = false,
+    AutoSummon          = false,
+
+    -- COMBAT
+    ProjectileRedirect  = false,
+    RedirectTarget      = "Mobs",   -- "Mobs" / "Players"
+    AimAtHead           = false,
+    KillAura            = false,
+    KillAuraRange       = 25,
+    AutoSkills          = false,
+    InstaKill           = false,
+
+    -- MOVEMENT
+    NoDashCooldown      = false,
+    NoStun              = false,
+    NoRagdoll           = false,
+    Fly                 = false,
+    FlySpeed            = 50,
+    Speedhack           = false,
+    WalkSpeed           = 50,
+    InfiniteJump        = false,
+    BunnyHop            = false,
+    Noclip              = false,
+    NoSlow              = false,
+    NoAnims             = false,
+    AnimSpeed           = 1,
+    Spinbot             = false,
+    SpinbotSpeed        = 10,
+
+    -- SAFETY
+    FarmPosition        = Vector3.new(0,0,0),
+    FarmOffset          = Vector3.new(0,2,0),
+    BackOffHP           = 30,
+    TPBackOnDeath       = false,
+    AntiAFK             = false,
+    AntiVoid            = false,
+    AntiFling           = false,
+
+    -- VISUAL
+    LocalHeadless       = false,
+    HideCharacters      = false,
+    HideNames           = false,
+
+    -- ESP
+    PlayerESP           = false,
+    LocalPlayerESP      = false,
+    NearestOnly         = false,
+    Whitelist           = {},
+    FreshieTag          = false,
+    MobESP              = false,
+    MobESPTarget        = "All",
+    DroppedItemESP      = false,
+    ArrowSpawnESP       = false,
+    ESPBoxes            = true,
+    ESPHealthBars       = true,
+    ESPNames            = true,
+    ESPDistance         = true,
+    ESPColour           = Color3.fromRGB(255, 50, 50),
+    NetworkOwnerViewer  = false,
+
+    -- CAMERA
+    CustomFOV           = 70,
+    InfiniteZoom        = false,
+    Force3rdPerson      = false,
+    Fullbright          = false,
+    NoFog               = false,
+    NoAtmosphere        = false,
+    NoShadows           = false,
+    NukeEffects         = false,
+    PotatoMode          = false,
+    XRay                = false,
+    HideMap             = false,
+
+    -- ALERT / LOG
+    NearbyAlert         = false,
+    NearbyAlertRange    = 50,
+    AutoRetreat         = false,
+    JoinLeaveLogger     = false,
+    ChatLogger          = false,
+    AutoRejoin          = false,
+
+    -- WEBHOOK
+    WebhookURL          = "",
+    WebhookEvents       = false,
+    WebhookSession      = false,
+
+    -- TP / CLICK
+    ClickTP             = false,
+    NPCTeleportName     = "",
+    AreaTPName          = "",
+}
+
+-- ============================================================
+-- UTILS
+-- ============================================================
+local function GetChar()   return lp.Character or lp.CharacterAdded:Wait() end
+local function GetHRP()    local c=GetChar(); return c and c:FindFirstChild("HumanoidRootPart") end
+local function GetHum()    local c=GetChar(); return c and c:FindFirstChildOfClass("Humanoid") end
+
+local function Notify(t, m)
+    StarterGui:SetCore("SendNotification",{Title=t,Text=m,Duration=3})
+end
+
+local function SendWebhook(title, desc)
+    if Config.WebhookURL == "" then return end
+    pcall(function()
+        local body = HttpService:JSONEncode({
+            username = "StandOut | AR-AI",
+            embeds = {{
+                title = title,
+                description = desc,
+                color = 0xff3232,
+                footer = { text = os.date("%X") }
+            }}
+        })
+        if syn and syn.request then
+            syn.request({ Url=Config.WebhookURL, Method="POST",
+                Headers={["Content-Type"]="application/json"}, Body=body })
+        elseif http and http.request then
+            http.request({ Url=Config.WebhookURL, Method="POST",
+                Headers={["Content-Type"]="application/json"}, Body=body })
+        end
+    end)
+end
+
+local function GetNearestMob(tag)
+    local hrp = GetHRP(); if not hrp then return nil end
+    local best, bestD = nil, math.huge
+    for _, v in ipairs(Workspace:GetDescendants()) do
+        if v:IsA("Model") and v ~= lp.Character then
+            local h = v:FindFirstChildOfClass("Humanoid")
+            local vr = v:FindFirstChild("HumanoidRootPart")
+            if h and h.Health > 0 and vr then
+                local d = (vr.Position - hrp.Position).Magnitude
+                if d < bestD then
+                    if tag == "All" or v.Name:lower():find(tag:lower()) then
+                        best = v; bestD = d
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function ServerHop()
+    pcall(function()
+        local data = HttpService:JSONDecode(
+            game:HttpGet("https://games.roproxy.com/v1/games/"..game.PlaceId.."/servers/Public?limit=25"))
+        if data and data.data then
+            local pool = {}
+            for _, s in ipairs(data.data) do
+                if s.id ~= game.JobId and s.playing < s.maxPlayers then
+                    table.insert(pool, s.id)
+                end
+            end
+            if #pool > 0 then
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, pool[math.random(1,#pool)])
+                return
+            end
+        end
+        TeleportService:Teleport(game.PlaceId)
+    end)
+end
+
+-- ============================================================
+-- ESP
+-- ============================================================
+local ESPFolder = Instance.new("Folder",CoreGui); ESPFolder.Name="ESP_SO"
+local ESPCache = {}
+
+local function MakeESP(adornee, color, label)
+    local key = tostring(adornee)
+    if ESPCache[key] then ESPCache[key]:Destroy() end
+
+    local bb = Instance.new("BillboardGui")
+    bb.Adornee = adornee
+    bb.AlwaysOnTop = true
+    bb.Size = UDim2.new(0,4,0,4)
+    bb.StudsOffset = Vector3.new(0,3.2,0)
+    bb.Parent = ESPFolder
+
+    if Config.ESPBoxes then
+        local f = Instance.new("Frame",bb)
+        f.Size = UDim2.new(1,0,1,0); f.BackgroundTransparency=1; f.BorderSizePixel=0
+        local function L(p,s) local x=Instance.new("Frame",f);x.BackgroundColor3=color;x.BorderSizePixel=0;x.Position=p;x.Size=s end
+        L(UDim2.new(0,0,0,0),UDim2.new(1,0,0,2))
+        L(UDim2.new(0,0,1,-2),UDim2.new(1,0,0,2))
+        L(UDim2.new(0,0,0,0),UDim2.new(0,2,1,0))
+        L(UDim2.new(1,-2,0,0),UDim2.new(0,2,1,0))
+    end
+
+    if Config.ESPNames or Config.ESPDistance then
+        local lbl = Instance.new("TextLabel",bb)
+        lbl.Name = "NL"; lbl.BackgroundTransparency=1
+        lbl.Size = UDim2.new(0,200,0,20); lbl.Position = UDim2.new(0.5,-100,0,-22)
+        lbl.TextColor3 = color; lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 13
+        lbl.Text = label or ""; lbl.TextStrokeTransparency = 0
+        lbl.TextStrokeColor3 = Color3.new(0,0,0)
+    end
+
+    if Config.ESPHealthBars then
+        local hb = Instance.new("Frame",bb)
+        hb.Name="HB"; hb.BackgroundColor3=Color3.fromRGB(0,200,0)
+        hb.BorderSizePixel=0; hb.Position=UDim2.new(-0.2,0,0,0); hb.Size=UDim2.new(0,4,1,0)
+    end
+
+    ESPCache[key] = bb
+    return bb
+end
+
+local function KillESP(adornee)
+    local k = tostring(adornee)
+    if ESPCache[k] then ESPCache[k]:Destroy(); ESPCache[k]=nil end
+end
+
+-- Player ESP loop
+RunService.Heartbeat:Connect(function()
+    if not Config.PlayerESP then return end
+    local hrp0 = GetHRP()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == lp and not Config.LocalPlayerESP then continue end
+        if not p.Character then continue end
+        local vhrp = p.Character:FindFirstChild("HumanoidRootPart")
+        if not vhrp then continue end
+        if Config.NearestOnly then
+            local other = nil; local bd = math.huge
+            for _, pp in ipairs(Players:GetPlayers()) do
+                if pp ~= lp and pp.Character then
+                    local vr = pp.Character:FindFirstChild("HumanoidRootPart")
+                    if vr and hrp0 then
+                        local d = (vr.Position-hrp0.Position).Magnitude
+                        if d < bd then bd=d; other=pp end
+                    end
+                end
+            end
+            if p ~= other and p ~= lp then continue end
+        end
+        local color = (p==lp) and Color3.fromRGB(0,255,100) or Config.ESPColour
+        local dist = hrp0 and math.floor((vhrp.Position-hrp0.Position).Magnitude) or 0
+        local lbl = p.DisplayName
+        if Config.ESPDistance then lbl = lbl .. "  ["..dist.."m]" end
+        if Config.FreshieTag then
+            local ls = p:FindFirstChild("leaderstats")
+            local lvl = ls and ls:FindFirstChild("Level")
+            if lvl and lvl.Value < 10 then lbl = lbl .. " 🐣" end
+        end
+        local esp = ESPCache[tostring(vhrp)]
+        if not esp or not esp.Parent then
+            MakeESP(vhrp, color, lbl)
+        else
+            local nl = esp:FindFirstChild("NL",true)
+            if nl then nl.Text = lbl end
+            -- update HP bar
+            local hum = p.Character:FindFirstChildOfClass("Humanoid")
+            local hb = esp:FindFirstChild("HB",true)
+            if hb and hum then
+                local pct = hum.Health / math.max(hum.MaxHealth,1)
+                hb.Size = UDim2.new(0,4,pct,0)
+                hb.BackgroundColor3 = Color3.fromRGB(math.floor((1-pct)*255), math.floor(pct*200), 0)
+            end
+        end
+    end
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+    if p.Character then
+        local vhrp = p.Character:FindFirstChild("HumanoidRootPart")
+        if vhrp then KillESP(vhrp) end
+    end
+end)
+
+-- ============================================================
+-- AUTO ROLL  →  StandRoll (RemoteFunction)
+-- ============================================================
+local sessionStart = os.time()
+coroutine.wrap(function()
+    while true do
+        task.wait(0.6)
+        if not Config.AutoRoll then continue end
+        local ok, result = pcall(function()
+            -- StandRoll expects arrow type as arg
+            return Remotes.StandRoll:InvokeServer(Config.ArrowType)
+        end)
+        if ok and result then
+            local standName = type(result)=="string" and result
+                or (type(result)=="table" and (result.Name or result.Stand or result[1])) or ""
+            if standName ~= "" then
+                -- keep legendary+
+                if Config.KeepLegendaryPlus then
+                    for _, kw in ipairs({"Legendary","Mythical","Godly","Unique","Secret"}) do
+                        if standName:find(kw) then
+                            Config.AutoRoll = false
+                            Notify("Auto Roll","Got "..kw..": "..standName)
+                            SendWebhook("Stand Rolled",standName.." ("..kw..")")
+                            break
+                        end
+                    end
+                end
+                -- keep wanted
+                for _, w in ipairs(Config.WantedStands) do
+                    if standName:lower():find(w:lower()) then
+                        Config.AutoRoll = false
+                        Notify("Auto Roll","Got wanted: "..standName)
+                        SendWebhook("Wanted Stand","Got: "..standName)
+                        break
+                    end
+                end
+            end
+        end
+    end
+end)()
+
+-- ============================================================
+-- BOUNTY FARM  →  Bounty + PlayerBounties remotes
+-- ============================================================
+coroutine.wrap(function()
+    while true do
+        task.wait(2)
+        if not Config.BountyFarm then continue end
+        pcall(function() Remotes.PlayerBounties:FireServer("Refresh") end)
+        pcall(function() Remotes.Bounty:FireServer("Claim") end)
+    end
+end)()
+
+-- ============================================================
+-- QUEST FARM  →  Quest / FateQuest / MajorTomQuest / MuseumQuest
+-- ============================================================
+coroutine.wrap(function()
+    while true do
+        task.wait(1)
+        if Config.StoryFarm then
+            pcall(function() Remotes.Quest:FireServer("Progress") end)
+            pcall(function() Remotes.FateQuest:FireServer("Progress") end)
+        end
+        if Config.SideQuestFarm then
+            pcall(function() Remotes.MajorTomQuest:FireServer("Progress") end)
+            pcall(function() Remotes.MuseumQuest:FireServer("Progress") end)
+        end
+        task.wait(1)
+    end
+end)()
+
+-- ============================================================
+-- ITEM FARM  →  Item + ArrowSupporter + ClaimReward
+-- ============================================================
+coroutine.wrap(function()
+    while true do
+        task.wait(1)
+        if Config.ItemFarm then
+            pcall(function() Remotes.Item:FireServer("Collect") end)
+            pcall(function() Remotes.ClaimReward:InvokeServer() end)
+        end
+        if Config.CheckArrowSpots then
+            pcall(function() Remotes.ArrowSupporter:FireServer("Check") end)
+        end
+        task.wait(1)
+    end
+end)()
+
+-- ============================================================
+-- STAND FOLLOW / PILOT  →  StandFollow remote
+-- ============================================================
+coroutine.wrap(function()
+    while true do
+        task.wait(0.1)
+        if Config.AutoPilot or Config.AttachStand then
+            local hrp = GetHRP()
+            local target = GetNearestMob("All")
+            if hrp and target then
+                local thrp = target:FindFirstChild("HumanoidRootPart")
+                if thrp then
+                    pcall(function()
+                        Remotes.StandFollow:FireServer(
+                            thrp.Position,          -- pilot position
+                            Config.InfinitePilotRange and 9999 or nil,
+                            Config.AttackWhileAttached
+                        )
+                    end)
+                    -- also sync mouse pos for attack aim
+                    if Config.AimAtHead then
+                        local head = target:FindFirstChild("Head") or thrp
+                        pcall(function()
+                            Remotes.MousePos:FireServer(head.Position)
+                        end)
+                    end
+                end
+            end
+        end
+    end
+end)()
+
+-- ============================================================
+-- PROJECTILE REDIRECT  →  ProjectileAim remote
+-- ============================================================
+coroutine.wrap(function()
+    while true do
+        task.wait(0.05)
+        if not Config.ProjectileRedirect then continue end
+        local target
+        if Config.RedirectTarget == "Mobs" then
+            target = GetNearestMob("All")
+        else
+            local best, bestD = nil, math.huge
+            local hrp = GetHRP()
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= lp and p.Character then
+                    local vr = p.Character:FindFirstChild("HumanoidRootPart")
+                    if vr and hrp then
+                        local d = (vr.Position-hrp.Position).Magnitude
+                        if d < bestD then bestD=d; best=p end
+                    end
+                end
+            end
+            target = best and best.Character
+        end
+        if target then
+            local aimPart = (Config.AimAtHead and target:FindFirstChild("Head"))
+                         or target:FindFirstChild("HumanoidRootPart")
+            if aimPart then
+                pcall(function()
+                    Remotes.ProjectileAim:FireServer(aimPart.Position)
+                end)
+            end
+        end
+    end
+end)()
+
+-- ============================================================
+-- KILL AURA  →  TrainingDummyHit + direct health write
+-- ============================================================
+RunService.Heartbeat:Connect(function()
+    if not Config.KillAura then return end
+    local hrp = GetHRP(); if not hrp then return end
+    for _, v in ipairs(Workspace:GetDescendants()) do
+        if v:IsA("Model") and v ~= lp.Character then
+            local h = v:FindFirstChildOfClass("Humanoid")
+            local vr = v:FindFirstChild("HumanoidRootPart")
+            if h and h.Health > 0 and vr then
+                if (vr.Position - hrp.Position).Magnitude <= Config.KillAuraRange then
+                    if Config.InstaKill then
+                        h.Health = 0
+                    else
+                        pcall(function()
+                            Remotes.TrainingDummyHit:FireServer(v, 9999)
+                        end)
+                        h.Health = h.Health - 50
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- ============================================================
+-- MOB / BOSS FARM LOOP
+-- ============================================================
+coroutine.wrap(function()
+    while true do
+        task.wait(0.1)
+        if not (Config.BossFarm or Config.MobFarm) then continue end
+        local hrp = GetHRP(); if not hrp then continue end
+        local target = GetNearestMob(Config.MobTarget)
+        if target then
+            local thrp = target:FindFirstChild("HumanoidRootPart")
+            if thrp then
+                -- teleport behind mob
+                hrp.CFrame = CFrame.new(thrp.Position + Config.FarmOffset)
+                -- hit it
+                if Config.InstaKill then
+                    local h = target:FindFirstChildOfClass("Humanoid")
+                    if h then h.Health = 0 end
+                end
+                -- back off when low hp
+                local hum = GetHum()
+                if hum and hum.Health < (hum.MaxHealth * Config.BackOffHP/100) then
+                    hrp.CFrame = CFrame.new(Config.FarmPosition + Vector3.new(0,10,0))
+                end
+            end
+        else
+            if Config.ServerHopNoBoss then ServerHop() end
+        end
+    end
+end)()
+
+-- ============================================================
+-- MOVEMENT LOOP
+-- ============================================================
+local flyBV, flyBG
+
+local function EnableFly()
+    local hrp = GetHRP(); if not hrp then return end
+    if flyBV and flyBV.Parent then return end
+    flyBV = Instance.new("BodyVelocity",hrp)
+    flyBV.MaxForce = Vector3.new(1e9,1e9,1e9); flyBV.Velocity = Vector3.new(0,0,0)
+    flyBG = Instance.new("BodyGyro",hrp)
+    flyBG.MaxTorque = Vector3.new(1e9,1e9,1e9); flyBG.P = 1e4
+end
+
+local function DisableFly()
+    if flyBV then flyBV:Destroy(); flyBV=nil end
+    if flyBG then flyBG:Destroy(); flyBG=nil end
+end
+
+RunService.RenderStepped:Connect(function()
+    -- FLY
+    if Config.Fly then
+        EnableFly()
+        local hrp = GetHRP()
+        if hrp and flyBV and flyBG then
+            local d = Vector3.new(0,0,0)
+            local uis = UserInputService
+            if uis:IsKeyDown(Enum.KeyCode.W) then d=d+cam.CFrame.LookVector end
+            if uis:IsKeyDown(Enum.KeyCode.S) then d=d-cam.CFrame.LookVector end
+            if uis:IsKeyDown(Enum.KeyCode.A) then d=d-cam.CFrame.RightVector end
+            if uis:IsKeyDown(Enum.KeyCode.D) then d=d+cam.CFrame.RightVector end
+            if uis:IsKeyDown(Enum.KeyCode.Space) then d=d+Vector3.new(0,1,0) end
+            if uis:IsKeyDown(Enum.KeyCode.LeftControl) then d=d-Vector3.new(0,1,0) end
+            flyBV.Velocity = d.Magnitude>0 and d.Unit*Config.FlySpeed or Vector3.new(0,0,0)
+            flyBG.CFrame = cam.CFrame
+        end
+    else DisableFly() end
+
+    -- WALKSPEED
+    local hum = GetHum()
+    if hum then
+        if Config.Speedhack then hum.WalkSpeed = Config.WalkSpeed
+        else hum.WalkSpeed = 16 end
+        if Config.NoAnims then
+            local anim = hum:FindFirstChildOfClass("Animator")
+            if anim then for _,t in ipairs(anim:GetPlayingAnimationTracks()) do t:Stop(0) end end
+        end
+        if Config.AnimSpeed ~= 1 then
+            local anim = hum:FindFirstChildOfClass("Animator")
+            if anim then for _,t in ipairs(anim:GetPlayingAnimationTracks()) do t:AdjustSpeed(Config.AnimSpeed) end end
+        end
+        if Config.NoRagdoll then
+            hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll,false)
+            hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown,false)
+        end
+    end
+
+    -- NOCLIP
+    if Config.Noclip then
+        local c=GetChar(); if c then
+            for _,p in ipairs(c:GetDescendants()) do
+                if p:IsA("BasePart") then p.CanCollide=false end
+            end
+        end
+    end
+
+    -- SPINBOT
+    local hrp2=GetHRP()
+    if Config.Spinbot and hrp2 then
+        hrp2.CFrame = hrp2.CFrame * CFrame.Angles(0,math.rad(Config.SpinbotSpeed),0)
+    end
+
+    -- ANTI VOID
+    if Config.AntiVoid and hrp2 and hrp2.Position.Y < -100 then
+        hrp2.CFrame = CFrame.new(Config.FarmPosition+Vector3.new(0,5,0))
+    end
+
+    -- ANTI FLING
+    if Config.AntiFling and hrp2 and hrp2.Velocity.Magnitude > 500 then
+        hrp2.Velocity = Vector3.new(0,0,0)
+    end
+
+    -- LOCAL HEADLESS
+    if Config.LocalHeadless then
+        local c=GetChar()
+        if c then
+            local h=c:FindFirstChild("Head")
+            if h then h.LocalTransparencyModifier=1
+                local f=h:FindFirstChild("face")
+                if f then f.LocalTransparencyModifier=1 end
+            end
+        end
+    end
+
+    -- VISUALS
+    if Config.Fullbright then
+        Lighting.Brightness=2; Lighting.GlobalShadows=false
+        Lighting.Ambient=Color3.new(1,1,1); Lighting.OutdoorAmbient=Color3.new(1,1,1)
+    end
+    if Config.NoFog then Lighting.FogEnd=100000; Lighting.FogStart=99998 end
+    if Config.NoShadows then Lighting.GlobalShadows=false end
+    cam.FieldOfView = Config.CustomFOV
+    if Config.InfiniteZoom then
+        lp.CameraMaxZoomDistance=9999; lp.CameraMinZoomDistance=0
+    end
+end)
+
+-- INFINITE JUMP + BUNNY HOP
+UserInputService.JumpRequest:Connect(function()
+    if Config.InfiniteJump then
+        local h=GetHum(); if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
+end)
+
+RunService.Heartbeat:Connect(function()
+    if Config.BunnyHop and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+        local h=GetHum(); if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
+end)
+
+-- TP BACK ON DEATH
+lp.CharacterRemoving:Connect(function(c)
+    if Config.TPBackOnDeath then
+        local h=c:FindFirstChild("HumanoidRootPart")
+        if h then Config.FarmPosition=h.Position end
+    end
+end)
+
+lp.CharacterAdded:Connect(function(c)
+    if Config.TPBackOnDeath then
+        local h=c:WaitForChild("HumanoidRootPart",5)
+        if h then task.wait(0.3); h.CFrame=CFrame.new(Config.FarmPosition+Vector3.new(0,5,0)) end
+    end
+end)
+
+-- ANTI AFK via AfkRejoin keepalive
+RunService.Heartbeat:Connect(function()
+    if Config.AntiAFK then
+        pcall(function() Remotes.AfkRejoin:FireServer("KeepAlive") end)
+    end
+end)
+
+-- NEARBY ALERT
+local alertCooldown = 0
+RunService.Heartbeat:Connect(function()
+    if not Config.NearbyAlert then return end
+    if os.clock() - alertCooldown < 3 then return end
+    local hrp=GetHRP(); if not hrp then return end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p~=lp and p.Character then
+            local vr=p.Character:FindFirstChild("HumanoidRootPart")
+            if vr and (vr.Position-hrp.Position).Magnitude <= Config.NearbyAlertRange then
+                Notify("⚠ Nearby", p.DisplayName.." is close!")
+                if Config.WebhookEvents then SendWebhook("Nearby Alert", p.DisplayName.." near you") end
+                alertCooldown = os.clock()
+                break
+            end
+        end
+    end
+end)
+
+-- CLICK TP
+UserInputService.InputBegan:Connect(function(inp,gpe)
+    if gpe then return end
+    if Config.ClickTP and inp.UserInputType==Enum.UserInputType.MouseButton2 then
+        local hrp=GetHRP()
+        if hrp then hrp.CFrame=CFrame.new(mouse.Hit.Position+Vector3.new(0,3,0)) end
+    end
+end)
+
+-- JOIN / LEAVE / CHAT LOGGER
+Players.PlayerAdded:Connect(function(p)
+    if Config.JoinLeaveLogger then
+        Notify("+ Joined", p.DisplayName)
+        if Config.WebhookEvents then SendWebhook("Joined", p.Name.." joined") end
+    end
+    p.Chatted:Connect(function(msg)
+        if Config.ChatLogger then
+            Notify(p.DisplayName, msg)
+            if Config.WebhookEvents then SendWebhook("Chat: "..p.Name, msg) end
+        end
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+    if Config.JoinLeaveLogger then
+        Notify("- Left", p.DisplayName)
+        if Config.WebhookEvents then SendWebhook("Left", p.Name.." left") end
+    end
+end)
+
+-- SESSION REPORT ON CLOSE
+game:BindToClose(function()
+    if Config.WebhookSession then
+        SendWebhook("Session Report", string.format(
+            "Player: %s\nTime: %ds\nFarm: %s\nKA: %s\nRoll: %s",
+            lp.Name, os.time()-sessionStart,
+            tostring(Config.BossFarm or Config.MobFarm),
+            tostring(Config.KillAura),
+            tostring(Config.AutoRoll)
+        ))
+    end
+end)
+
+-- POTATO / NUKE EFFECTS (one-shot on toggle)
+local function ApplyPotatoMode()
+    Lighting.GlobalShadows=false
+    for _,v in ipairs(Workspace:GetDescendants()) do
+        if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Beam") then v.Enabled=false end
+    end
+end
+local function NukeEffects()
+    for _,v in ipairs(Workspace:GetDescendants()) do
+        if v:IsA("ParticleEmitter") or v:IsA("Smoke") or v:IsA("Fire") or v:IsA("Sparkles") then v.Enabled=false end
+    end
+end
+
+-- ============================================================
+-- GUI
+-- ============================================================
+local gui = Instance.new("ScreenGui")
+gui.Name="StandOutSO"; gui.ResetOnSpawn=false; gui.IgnoreGuiInset=true
+gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+pcall(function() gui.Parent=CoreGui end)
+if not gui.Parent then gui.Parent=lp.PlayerGui end
+
+local W,H = 660,440
+local mf = Instance.new("Frame",gui)
+mf.Size=UDim2.new(0,W,0,H); mf.Position=UDim2.new(0.5,-W/2,0.5,-H/2)
+mf.BackgroundColor3=Color3.fromRGB(14,14,20); mf.BorderSizePixel=0
+mf.Active=true; mf.Draggable=true
+Instance.new("UICorner",mf).CornerRadius=UDim.new(0,8)
+
+-- top bar
+local tb=Instance.new("Frame",mf); tb.Size=UDim2.new(1,0,0,36)
+tb.BackgroundColor3=Color3.fromRGB(220,40,40); tb.BorderSizePixel=0
+Instance.new("UICorner",tb).CornerRadius=UDim.new(0,8)
+local tbfix=Instance.new("Frame",tb); tbfix.Size=UDim2.new(1,0,0.5,0)
+tbfix.Position=UDim2.new(0,0,0.5,0); tbfix.BackgroundColor3=Color3.fromRGB(220,40,40); tbfix.BorderSizePixel=0
+
+local ttl=Instance.new("TextLabel",tb); ttl.Size=UDim2.new(1,-80,1,0)
+ttl.Position=UDim2.new(0,12,0,0); ttl.BackgroundTransparency=1
+ttl.Text="⚡  STAND OUT  |  AR-AI  |  github: fraughting"; ttl.TextColor3=Color3.new(1,1,1)
+ttl.Font=Enum.Font.GothamBold; ttl.TextSize=13; ttl.TextXAlignment=Enum.TextXAlignment.Left
+
+local function TopBtn(xoff,label,color,fn)
+    local b=Instance.new("TextButton",tb)
+    b.Size=UDim2.new(0,28,0,28); b.Position=UDim2.new(1,xoff,0,4)
+    b.BackgroundColor3=color; b.Text=label; b.TextColor3=Color3.new(1,1,1)
+    b.Font=Enum.Font.GothamBold; b.TextSize=13; b.BorderSizePixel=0
+    Instance.new("UICorner",b).CornerRadius=UDim.new(0,6)
+    b.MouseButton1Click:Connect(fn); return b
+end
+TopBtn(-34,"✕",Color3.fromRGB(200,30,30),function() mf.Visible=false end)
+TopBtn(-66,"−",Color3.fromRGB(50,50,80),function()
+    local cf=mf:FindFirstChild("Content")
+    if cf then cf.Visible=not cf.Visible
+        mf.Size=cf.Visible and UDim2.new(0,W,0,H) or UDim2.new(0,W,0,36)
+    end
+end)
+
+local content=Instance.new("Frame",mf); content.Name="Content"
+content.Size=UDim2.new(1,0,1,-36); content.Position=UDim2.new(0,0,0,36)
+content.BackgroundTransparency=1
+
+-- sidebar
+local sidebar=Instance.new("Frame",content)
+sidebar.Size=UDim2.new(0,120,1,0); sidebar.BackgroundColor3=Color3.fromRGB(10,10,16); sidebar.BorderSizePixel=0
+local sll=Instance.new("UIListLayout",sidebar); sll.SortOrder=Enum.SortOrder.LayoutOrder; sll.Padding=UDim.new(0,1)
+
+-- tab area
+local ta=Instance.new("Frame",content)
+ta.Size=UDim2.new(1,-124,1,-4); ta.Position=UDim2.new(0,124,0,2); ta.BackgroundTransparency=1
+
+local TABS={"Farm","Combat","Movement","ESP","Visual","Teleport","Server","Webhook"}
+local TabObjs={}
+
+local function SF(parent)
+    local s=Instance.new("ScrollingFrame",parent)
+    s.Size=UDim2.new(1,0,1,0); s.BackgroundTransparency=1
+    s.ScrollBarThickness=3; s.ScrollBarImageColor3=Color3.fromRGB(220,40,40); s.BorderSizePixel=0
+    local ll=Instance.new("UIListLayout",s); ll.Padding=UDim.new(0,3)
+    ll:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        s.CanvasSize=UDim2.new(0,0,0,ll.AbsoluteContentSize.Y+8)
+    end)
+    local pad=Instance.new("UIPadding",s)
+    pad.PaddingLeft=UDim.new(0,5); pad.PaddingRight=UDim.new(0,5); pad.PaddingTop=UDim.new(0,4)
+    return s
+end
+
+local function Toggle(parent,text,key,cb)
+    local row=Instance.new("Frame",parent)
+    row.Size=UDim2.new(1,-2,0,27); row.BackgroundColor3=Color3.fromRGB(22,22,32); row.BorderSizePixel=0
+    Instance.new("UICorner",row).CornerRadius=UDim.new(0,5)
+    local lbl=Instance.new("TextLabel",row)
+    lbl.Size=UDim2.new(1,-52,1,0); lbl.Position=UDim2.new(0,8,0,0); lbl.BackgroundTransparency=1
+    lbl.Text=text; lbl.TextColor3=Color3.fromRGB(210,210,210); lbl.Font=Enum.Font.Gotham
+    lbl.TextSize=12; lbl.TextXAlignment=Enum.TextXAlignment.Left
+    local btn=Instance.new("TextButton",row)
+    btn.Size=UDim2.new(0,38,0,18); btn.Position=UDim2.new(1,-42,0.5,-9)
+    btn.BackgroundColor3=Config[key] and Color3.fromRGB(220,40,40) or Color3.fromRGB(45,45,65)
+    btn.Text=""; btn.BorderSizePixel=0
+    Instance.new("UICorner",btn).CornerRadius=UDim.new(0,9)
+    local knob=Instance.new("Frame",btn)
+    knob.Size=UDim2.new(0,14,0,14)
+    knob.Position=Config[key] and UDim2.new(1,-16,0.5,-7) or UDim2.new(0,2,0.5,-7)
+    knob.BackgroundColor3=Color3.new(1,1,1); knob.BorderSizePixel=0
+    Instance.new("UICorner",knob).CornerRadius=UDim.new(1,0)
+    btn.MouseButton1Click:Connect(function()
+        Config[key]=not Config[key]
+        btn.BackgroundColor3=Config[key] and Color3.fromRGB(220,40,40) or Color3.fromRGB(45,45,65)
+        knob.Position=Config[key] and UDim2.new(1,-16,0.5,-7) or UDim2.new(0,2,0.5,-7)
+        if cb then cb(Config[key]) end
+    end)
+end
+
+local function Slider(parent,text,key,mn,mx)
+    local row=Instance.new("Frame",parent)
+    row.Size=UDim2.new(1,-2,0,40); row.BackgroundColor3=Color3.fromRGB(22,22,32); row.BorderSizePixel=0
+    Instance.new("UICorner",row).CornerRadius=UDim.new(0,5)
+    local lbl=Instance.new("TextLabel",row)
+    lbl.Size=UDim2.new(1,0,0,17); lbl.Position=UDim2.new(0,8,0,2); lbl.BackgroundTransparency=1
+    lbl.Text=text..": "..tostring(Config[key]); lbl.TextColor3=Color3.fromRGB(190,190,190)
+    lbl.Font=Enum.Font.Gotham; lbl.TextSize=11; lbl.TextXAlignment=Enum.TextXAlignment.Left
+    local track=Instance.new("Frame",row)
+    track.Size=UDim2.new(1,-16,0,5); track.Position=UDim2.new(0,8,0,25)
+    track.BackgroundColor3=Color3.fromRGB(45,45,65); track.BorderSizePixel=0
+    Instance.new("UICorner",track).CornerRadius=UDim.new(1,0)
+    local fill=Instance.new("Frame",track)
+    fill.BackgroundColor3=Color3.fromRGB(220,40,40); fill.BorderSizePixel=0
+    fill.Size=UDim2.new((Config[key]-mn)/(mx-mn),0,1,0)
+    Instance.new("UICorner",fill).CornerRadius=UDim.new(1,0)
+    local drag=false
+    track.InputBegan:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=true end end)
+    track.InputEnded:Connect(function(i) if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=false end end)
+    RunService.RenderStepped:Connect(function()
+        if not drag then return end
+        local r=math.clamp((mouse.X-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)
+        local v=math.floor(mn+r*(mx-mn))
+        Config[key]=v; fill.Size=UDim2.new(r,0,1,0)
+        lbl.Text=text..": "..v
+    end)
+end
+
+local function Btn(parent,text,fn)
+    local b=Instance.new("TextButton",parent)
+    b.Size=UDim2.new(1,-2,0,27); b.BackgroundColor3=Color3.fromRGB(220,40,40)
+    b.Text=text; b.TextColor3=Color3.new(1,1,1); b.Font=Enum.Font.GothamBold
+    b.TextSize=12; b.BorderSizePixel=0
+    Instance.new("UICorner",b).CornerRadius=UDim.new(0,5)
+    b.MouseButton1Click:Connect(fn)
+end
+
+local function Input(parent,text,key)
+    local row=Instance.new("Frame",parent)
+    row.Size=UDim2.new(1,-2,0,40); row.BackgroundColor3=Color3.fromRGB(22,22,32); row.BorderSizePixel=0
+    Instance.new("UICorner",row).CornerRadius=UDim.new(0,5)
+    local lbl=Instance.new("TextLabel",row)
+    lbl.Size=UDim2.new(1,0,0,17); lbl.Position=UDim2.new(0,8,0,2); lbl.BackgroundTransparency=1
+    lbl.Text=text; lbl.TextColor3=Color3.fromRGB(190,190,190); lbl.Font=Enum.Font.Gotham
+    lbl.TextSize=11; lbl.TextXAlignment=Enum.TextXAlignment.Left
+    local box=Instance.new("TextBox",row)
+    box.Size=UDim2.new(1,-16,0,17); box.Position=UDim2.new(0,8,0,21)
+    box.BackgroundColor3=Color3.fromRGB(32,32,48); box.Text=tostring(Config[key] or "")
+    box.TextColor3=Color3.new(1,1,1); box.Font=Enum.Font.Gotham; box.TextSize=11
+    box.BorderSizePixel=0; box.PlaceholderText="..."; box.PlaceholderColor3=Color3.fromRGB(90,90,110)
+    Instance.new("UICorner",box).CornerRadius=UDim.new(0,4)
+    box.FocusLost:Connect(function() Config[key]=box.Text end)
+end
+
+-- build tab buttons + frames
+for i,name in ipairs(TABS) do
+    local sf=SF(ta); sf.Name=name; sf.Visible=false
+    local tbtn=Instance.new("TextButton",sidebar)
+    tbtn.Size=UDim2.new(1,0,0,34); tbtn.BackgroundColor3=Color3.fromRGB(10,10,16)
+    tbtn.Text=name; tbtn.TextColor3=Color3.fromRGB(160,160,160)
+    tbtn.Font=Enum.Font.Gotham; tbtn.TextSize=12; tbtn.BorderSizePixel=0; tbtn.LayoutOrder=i
+    TabObjs[name]={btn=tbtn,sf=sf}
+    tbtn.MouseButton1Click:Connect(function()
+        for _,t in pairs(TabObjs) do
+            t.sf.Visible=false
+            t.btn.BackgroundColor3=Color3.fromRGB(10,10,16)
+            t.btn.TextColor3=Color3.fromRGB(160,160,160)
+        end
+        sf.Visible=true
+        tbtn.BackgroundColor3=Color3.fromRGB(220,40,40)
+        tbtn.TextColor3=Color3.new(1,1,1)
+    end)
+end
+
+-- activate first tab
+TabObjs["Farm"].sf.Visible=true
+TabObjs["Farm"].btn.BackgroundColor3=Color3.fromRGB(220,40,40)
+TabObjs["Farm"].btn.TextColor3=Color3.new(1,1,1)
+
+-- ============================================================
+-- POPULATE TABS
+-- ============================================================
+local F=TabObjs["Farm"].sf
+Toggle(F,"Boss Farm","BossFarm")
+Toggle(F,"Mob Farm","MobFarm")
+Input(F,"Mob Target (name / All)","MobTarget")
+Toggle(F,"Story Farm","StoryFarm")
+Toggle(F,"Side Quest Farm","SideQuestFarm")
+Toggle(F,"Bounty Farm","BountyFarm")
+Toggle(F,"Item Farm","ItemFarm")
+Toggle(F,"Check Arrow Spots","CheckArrowSpots")
+Toggle(F,"Server Hop (No Boss)","ServerHopNoBoss")
+Toggle(F,"Auto Roll","AutoRoll")
+Input(F,"Arrow Type (Normal/Mysterious/Rib)","ArrowType")
+Toggle(F,"Keep Legendary+","KeepLegendaryPlus")
+Slider(F,"Back Off HP %","BackOffHP",1,99)
+Btn(F,"Set Farm Position Here",function()
+    local hrp=GetHRP(); if hrp then Config.FarmPosition=hrp.Position; Notify("Farm Pos","Set!") end
+end)
+
+local C=TabObjs["Combat"].sf
+Toggle(C,"Kill Aura","KillAura")
+Slider(C,"Kill Aura Range","KillAuraRange",5,150)
+Toggle(C,"Insta Kill","InstaKill")
+Toggle(C,"Auto Skills","AutoSkills")
+Toggle(C,"Projectile Redirect","ProjectileRedirect")
+Input(C,"Redirect Target (Mobs/Players)","RedirectTarget")
+Toggle(C,"Aim At Head","AimAtHead")
+Toggle(C,"No Dash Cooldown","NoDashCooldown")
+Toggle(C,"No Stun","NoStun")
+Toggle(C,"No Ragdoll","NoRagdoll")
+Toggle(C,"Infinite Pilot Range","InfinitePilotRange")
+Toggle(C,"Attach Stand","AttachStand")
+Toggle(C,"Auto Pilot","AutoPilot")
+Toggle(C,"Attack While Attached","AttackWhileAttached")
+Toggle(C,"Auto Stats","AutoStats")
+Toggle(C,"Auto Summon","AutoSummon")
+
+local M=TabObjs["Movement"].sf
+Toggle(M,"Fly","Fly")
+Slider(M,"Fly Speed","FlySpeed",10,300)
+Toggle(M,"Speedhack","Speedhack")
+Slider(M,"Walk Speed","WalkSpeed",16,500)
+Toggle(M,"Infinite Jump","InfiniteJump")
+Toggle(M,"Bunny Hop","BunnyHop")
+Toggle(M,"Noclip","Noclip")
+Toggle(M,"No Anims","NoAnims")
+Slider(M,"Anim Speed","AnimSpeed",0,10)
+Toggle(M,"Spinbot","Spinbot")
+Slider(M,"Spinbot Speed","SpinbotSpeed",1,50)
+Toggle(M,"TP Back On Death","TPBackOnDeath")
+Toggle(M,"Anti AFK","AntiAFK")
+Toggle(M,"Anti Void","AntiVoid")
+Toggle(M,"Anti Fling","AntiFling")
+Toggle(M,"Local Headless","LocalHeadless")
+
+local E=TabObjs["ESP"].sf
+Toggle(E,"Player ESP","PlayerESP")
+Toggle(E,"Local Player ESP","LocalPlayerESP")
+Toggle(E,"Nearest Only","NearestOnly")
+Toggle(E,"Freshie Tag","FreshieTag")
+Toggle(E,"Mob ESP","MobESP",function(on)
+    if on then
+        for _,v in ipairs(Workspace:GetDescendants()) do
+            if v:IsA("Model") and v~=lp.Character and v:FindFirstChildOfClass("Humanoid") then
+                local vr=v:FindFirstChild("HumanoidRootPart")
+                if vr then
+                    if Config.MobESPTarget=="All" or v.Name:lower():find(Config.MobESPTarget:lower()) then
+                        MakeESP(vr,Color3.fromRGB(255,165,0),v.Name)
+                    end
+                end
+            end
+        end
+    end
+end)
+Input(E,"Mob ESP Target","MobESPTarget")
+Toggle(E,"Dropped Item ESP","DroppedItemESP",function(on)
+    if on then
+        local drops=Workspace:FindFirstChild("Drops") or Workspace:FindFirstChild("DroppedItems")
+        if drops then
+            local function tag(v)
+                local part=v:IsA("Model") and v.PrimaryPart or (v:IsA("BasePart") and v)
+                if part then MakeESP(part,Color3.fromRGB(0,255,255),v.Name) end
+            end
+            for _,v in ipairs(drops:GetChildren()) do tag(v) end
+            drops.ChildAdded:Connect(function(v) if Config.DroppedItemESP then tag(v) end end)
+        end
+    end
+end)
+Toggle(E,"Arrow Spawn ESP","ArrowSpawnESP",function(on)
+    if on then
+        for _,v in ipairs(Workspace:GetDescendants()) do
+            if v.Name:lower():find("arrow") then
+                local part=v:IsA("Model") and v.PrimaryPart or (v:IsA("BasePart") and v)
+                if part then MakeESP(part,Color3.fromRGB(255,255,0),"Arrow") end
+            end
+        end
+    end
+end)
+Toggle(E,"ESP Boxes","ESPBoxes")
+Toggle(E,"ESP Health Bars","ESPHealthBars")
+Toggle(E,"ESP Names","ESPNames")
+Toggle(E,"ESP Distance","ESPDistance")
+Toggle(E,"Network Owner Viewer","NetworkOwnerViewer")
+
+local V=TabObjs["Visual"].sf
+Toggle(V,"Fullbright","Fullbright")
+Toggle(V,"No Fog","NoFog")
+Toggle(V,"No Atmosphere","NoAtmosphere",function(on)
+    for _,v in ipairs(Lighting:GetChildren()) do
+        if v:IsA("Atmosphere") then v.Density=on and 0 or 0.395; v.Haze=on and 0 or 0 end
+    end
+end)
+Toggle(V,"No Shadows","NoShadows")
+Toggle(V,"X-Ray","XRay",function(on)
+    for _,v in ipairs(Workspace:GetDescendants()) do
+        if v:IsA("BasePart") and not v:IsDescendantOf(lp.Character or Instance.new("Folder")) then
+            v.Material=on and Enum.Material.ForceField or Enum.Material.SmoothPlastic
+        end
+    end
+end)
+Slider(V,"Custom FOV","CustomFOV",30,120)
+Toggle(V,"Infinite Zoom","InfiniteZoom")
+Toggle(V,"Force 3rd Person","Force3rdPerson",function(on)
+    cam.CameraType=on and Enum.CameraType.Follow or Enum.CameraType.Custom
+end)
+Toggle(V,"Nuke Effects","NukeEffects",function(on) if on then NukeEffects() end end)
+Toggle(V,"Potato Mode","PotatoMode",function(on) if on then ApplyPotatoMode() end end)
+Toggle(V,"Hide Map","HideMap",function(on)
+    local map=Workspace:FindFirstChild("Map") or Workspace:FindFirstChild("World")
+    if map then
+        for _,v in ipairs(map:GetDescendants()) do
+            if v:IsA("BasePart") or v:IsA("Decal") or v:IsA("Texture") then
+                v.LocalTransparencyModifier=on and 1 or 0
+            end
+        end
+    end
+end)
+
+local T=TabObjs["Teleport"].sf
+Input(T,"Area Name","AreaTPName")
+Btn(T,"Go to Area",function()
+    local obj=Workspace:FindFirstChild(Config.AreaTPName,true)
+    if obj then
+        local hrp=GetHRP()
+        local pos=obj:IsA("Model") and obj.PrimaryPart and obj.PrimaryPart.Position
+            or (obj:IsA("BasePart") and obj.Position)
+        if hrp and pos then hrp.CFrame=CFrame.new(pos+Vector3.new(0,5,0)) end
+    else Notify("TP","Not found: "..Config.AreaTPName) end
+end)
+Input(T,"NPC Name","NPCTeleportName")
+Btn(T,"TP to NPC",function()
+    for _,v in ipairs(Workspace:GetDescendants()) do
+        if v.Name==Config.NPCTeleportName and v:IsA("Model") then
+            local hrp=GetHRP()
+            local vr=v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+            if hrp and vr then hrp.CFrame=CFrame.new(vr.Position+Vector3.new(3,0,0)); break end
+        end
+    end
+end)
+Toggle(T,"Click TP (RMB)","ClickTP")
+Btn(T,"Copy Position",function()
+    local hrp=GetHRP()
+    if hrp then
+        local p=hrp.Position
+        setclipboard(("Vector3.new(%.2f, %.2f, %.2f)"):format(p.X,p.Y,p.Z))
+        Notify("Copied",tostring(p))
+    end
+end)
+Btn(T,"TP to Quest",function()
+    pcall(function() Remotes.Quest:FireServer("GetLocation") end)
+end)
+
+local SV=TabObjs["Server"].sf
+Toggle(SV,"Join/Leave Logger","JoinLeaveLogger")
+Toggle(SV,"Chat Logger","ChatLogger")
+Toggle(SV,"Auto Rejoin","AutoRejoin")
+Toggle(SV,"Nearby Alert","NearbyAlert")
+Slider(SV,"Alert Range","NearbyAlertRange",10,200)
+Btn(SV,"Server Hop",ServerHop)
+Btn(SV,"Rejoin",function() TeleportService:Teleport(game.PlaceId) end)
+Btn(SV,"Copy Job ID",function()
+    setclipboard(game.JobId); Notify("Copied","Job ID: "..game.JobId)
+end)
+Btn(SV,"Get Server Directory",function()
+    pcall(function() Remotes.ServerDirectory:FireServer("List") end)
+end)
+
+local WH=TabObjs["Webhook"].sf
+Input(WH,"Webhook URL","WebhookURL")
+Toggle(WH,"Event Posts","WebhookEvents")
+Toggle(WH,"Session Reports","WebhookSession")
+Btn(WH,"Test Webhook",function()
+    if Config.WebhookURL~="" then
+        SendWebhook("Test","Script online. Player: "..lp.Name)
+        Notify("Webhook","Sent.")
+    else Notify("Webhook","No URL set.") end
+end)
+Btn(WH,"Send Session Report",function()
+    SendWebhook("Session Report",("Player: %s\nTime: %ds\nFarm: %s\nKA: %s\nRoll: %s"):format(
+        lp.Name, os.time()-sessionStart,
+        tostring(Config.BossFarm or Config.MobFarm),
+        tostring(Config.KillAura), tostring(Config.AutoRoll)))
+end)
+
+-- ============================================================
+-- KEYBINDS
+-- ============================================================
+UserInputService.InputBegan:Connect(function(inp,gpe)
+    if gpe then return end
+    if inp.KeyCode==Enum.KeyCode.Insert or inp.KeyCode==Enum.KeyCode.Delete then
+        mf.Visible=not mf.Visible
+    end
+end)
+
+-- ============================================================
+-- BOOT
+-- ============================================================
+Notify("Stand Out Script","Loaded. INSERT/DELETE = toggle UI. 6767")
+print("[AR-AI] Stand Out — remote-patched — fraughting illgeallycrime Ar0")
