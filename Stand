@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Vault Sequence Fix)
+-- [AR-AI] Stand Out — Full Script (Two-Vault Fix)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -262,11 +262,14 @@ local function HoldPrompt(promptName)
     end
     if not pp then return false end
 
-    local model = pp.Parent and pp.Parent.PrimaryPart
-    if model then
+    -- Safely TP to the parent object without crashing if it's an Attachment
+    local model = pp.Parent
+    if model and model:IsA("Model") and model.PrimaryPart then
+        TPTo(model.PrimaryPart.Position, 2)
+    elseif model and model:IsA("BasePart") then
         TPTo(model.Position, 2)
-    else
-        TPTo(pp.Parent.Position, 2) 
+    elseif model and model.Parent and model.Parent:IsA("Model") and model.Parent.PrimaryPart then
+        TPTo(model.Parent.PrimaryPart.Position, 2)
     end
     WaitFor(0.5)
 
