@@ -1,4 +1,4 @@
--- [AR-AI] Stand Out — Full Script (Strict Prompt Hold)
+-- [AR-AI] Stand Out — Full Script (Fixed Remote Types)
 -- fraughting, illgeallycrime, Ar0
 
 local Players    = game:GetService("Players")
@@ -17,42 +17,57 @@ local cam = Workspace.CurrentCamera
 local mouse = lp:GetMouse()
 
 -- ============================================================
--- REMOTES
+-- REMOTES (Safe Load + Auto Clipboard)
 -- ============================================================
 local R  = ReplicatedStorage:WaitForChild("Remotes")
 local SR = ReplicatedStorage:WaitForChild("StandOutCustomization"):WaitForChild("Remotes")
 
+local copiedText = ""
+local function getRemote(parent, name)
+    local r = parent:FindFirstChild(name)
+    if r then
+        copiedText = copiedText .. name .. " | Class: " .. r.ClassName .. "\n"
+        return r
+    else
+        warn("[AR-AI] MISSING REMOTE: " .. name)
+        copiedText = copiedText .. "MISSING: " .. name .. "\n"
+        return nil
+    end
+end
+
 local Rem = {
-    StandRoll         = SR:WaitForChild("StandRoll"),
-    CosmeticRoll      = R:WaitForChild("CosmeticRoll"),
-    Standify          = R:WaitForChild("Standify"),
-    StandFollowPose   = R:WaitForChild("StandFollowPose"),
-    StandStorage      = R:WaitForChild("StandStorage"),
-    StandPresentation = R:WaitForChild("StandPresentation"),
-    Open              = SR:WaitForChild("Open"),
-    CombatReturn      = R:WaitForChild("CombatReturn"),
-    ProjectileAim     = R:WaitForChild("ProjectileAim"),
-    TrainingDummyHit  = R:WaitForChild("TrainingDummyHit"),
-    BarrageCancel     = R:WaitForChild("BarrageCancel"),
-    Quest             = R:WaitForChild("Quest"),
-    FateQuest         = R:WaitForChild("FateQuest"),
-    MajorTomQuest     = R:WaitForChild("MajorTomQuest"),
-    MuseumQuest       = R:WaitForChild("MuseumQuest"),
-    Bounty            = R:WaitForChild("Bounty"),
-    PlayerBounties    = R:WaitForChild("PlayerBounties"),
-    WorldEvents       = R:WaitForChild("WorldEvents"),
-    Item              = R:WaitForChild("Item"),
-    Craft             = R:WaitForChild("Craft"),
-    ArrowSupporter    = R:WaitForChild("ArrowSupporter"),
-    ClaimReward       = R:WaitForChild("ClaimReward"),
-    Dialogue          = R:WaitForChild("Dialogue"),
-    ToClient          = R:WaitForChild("ToClient"),
-    ServerDirectory   = R:WaitForChild("ServerDirectory"),
-    AfkRejoin         = R:WaitForChild("AfkRejoin"),
-    MousePos          = ReplicatedStorage:WaitForChild("Modules")
-                            :WaitForChild("Utility")
-                            :WaitForChild("MousePositionServerRemote"),
+    StandRoll         = getRemote(SR, "StandRoll"),
+    CosmeticRoll      = getRemote(R, "CosmeticRoll"),
+    Standify          = getRemote(R, "Standify"),
+    StandFollowPose   = getRemote(R, "StandFollowPose"),
+    StandStorage      = getRemote(R, "StandStorage"),
+    StandPresentation = getRemote(R, "StandPresentation"),
+    Open              = getRemote(SR, "Open"),
+    CombatReturn      = getRemote(R, "CombatReturn"), -- RemoteFunction
+    ProjectileAim     = getRemote(R, "ProjectileAim"),
+    TrainingDummyHit  = getRemote(R, "TrainingDummyHit"),
+    BarrageCancel     = getRemote(R, "BarrageCancel"),
+    Quest             = getRemote(R, "Quest"),
+    FateQuest         = getRemote(R, "FateQuest"),
+    MajorTomQuest     = getRemote(R, "MajorTomQuest"),
+    MuseumQuest       = getRemote(R, "MuseumQuest"),
+    Bounty            = getRemote(R, "Bounty"),
+    PlayerBounties    = getRemote(R, "PlayerBounties"),
+    WorldEvents       = getRemote(R, "WorldEvents"),
+    Item              = getRemote(R, "Item"),
+    Craft             = getRemote(R, "Craft"),
+    ArrowSupporter    = getRemote(R, "ArrowSupporter"),
+    ClaimReward       = getRemote(R, "ClaimReward"),
+    Dialogue          = getRemote(R, "Dialogue"),
+    ToClient          = getRemote(R, "ToClient"),
+    ServerDirectory   = getRemote(R, "ServerDirectory"),
+    AfkRejoin         = getRemote(R, "AfkRejoin"),
+    MousePos          = getRemote(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Utility"), "MousePositionServerRemote"),
 }
+
+pcall(function()
+    if setclipboard then setclipboard(copiedText) end
+end)
 
 -- ============================================================
 -- CONFIG
@@ -514,7 +529,7 @@ coroutine.wrap(function()
 end)()
 
 -- ============================================================
--- KILL AURA — direct health write (confirmed working)
+-- KILL AURA — Direct Health Write & InvokeServer
 -- ============================================================
 local kaLast = 0
 RunService.Heartbeat:Connect(function()
@@ -522,12 +537,23 @@ RunService.Heartbeat:Connect(function()
     if os.clock() - kaLast < 0.05 then return end
     kaLast = os.clock()
     local hrp = GetHRP(); if not hrp then return end
+    
     for _, v in ipairs(Workspace:GetDescendants()) do
         if v:IsA("Model") and v ~= lp.Character then
             local h = v:FindFirstChildOfClass("Humanoid")
             local vr = v:FindFirstChild("HumanoidRootPart")
             if h and h.Health > 0 and vr then
                 if (vr.Position - hrp.Position).Magnitude <= Config.KillAuraRange then
+                    -- TP to the mob first so the server registers the distance
+                    hrp.CFrame = CFrame.new(vr.Position + Vector3.new(0, 2, 0))
+                    task.wait(0.03)
+
+                    -- Fire the damage remotes
+                    pcall(function() Rem.MousePos:FireServer(vr.Position) end)
+                    pcall(function() Rem.CombatReturn:InvokeServer("HeavyAttack", v, vr.Position) end)
+                    pcall(function() Rem.TrainingDummyHit:FireServer(v, 9999) end)
+                    
+                    -- Local visual write
                     if Config.InstaKill then
                         h.Health = 0
                         pcall(function() h:TakeDamage(99999) end)
@@ -542,7 +568,7 @@ RunService.Heartbeat:Connect(function()
 end)
 
 -- ============================================================
--- MOB / BOSS FARM — TP + direct kill (confirmed working)
+-- MOB / BOSS FARM — TP + direct kill
 -- ============================================================
 coroutine.wrap(function()
     while true do
@@ -554,8 +580,13 @@ coroutine.wrap(function()
             local thrp = target:FindFirstChild("HumanoidRootPart")
             if not thrp then continue end
             hrp.CFrame = CFrame.new(thrp.Position + Vector3.new(0, 2, 0))
+            
             local h = target:FindFirstChildOfClass("Humanoid")
             if h and h.Health > 0 then
+                pcall(function() Rem.MousePos:FireServer(thrp.Position) end)
+                pcall(function() Rem.CombatReturn:InvokeServer("HeavyAttack", target, thrp.Position) end)
+                pcall(function() Rem.TrainingDummyHit:FireServer(target, 9999) end)
+
                 if Config.InstaKill then
                     h.Health = 0
                     pcall(function() h:TakeDamage(99999) end)
