@@ -171,6 +171,7 @@ Config.Values = {
 	KillAura   = { enabled=false, range=15 },
 	InstaKill  = { enabled=false, range=15, hpThreshold=35, ownedMobsOnly=true, oneVerifiedTry=true },
 	Dash       = { noCooldown=false, noStun=false, noRagdoll=false },
+	Combat     = { writtenInStone=false, wisRange=30, autoSummon=false, summonCooldown=5 },
 	AutoSkills = { enabled=false, skills={}, skillGap=1.0, enemyRange=30 },
 	Movement   = { fly=false, flySpeed=60, speedhack=false, speed=24, noSlow=false,
 	               infiniteJump=false, jumpHeight=50, ignoreJumpLock=false,
@@ -986,21 +987,59 @@ function Features.setInstaKill(on)
 end
 
 -- ---- 9.8  AUTO ROLL ----
+-- StandRoll returns {ok=bool, stand=string, rarity=string} from InvokeServer
+-- We also listen to StandStorage OnClientEvent as a fallback (game fires it on roll result)
+local _lastRolledStand = nil
+pcall(function()
+	local RS2=game:GetService("ReplicatedStorage")
+	local storage=RS2:FindFirstChild("Remotes") and RS2.Remotes:FindFirstChild("StandStorage")
+	if storage and storage:IsA("RemoteEvent") then
+		storage.OnClientEvent:Connect(function(action, standName, ...)
+			if action=="Rolled" or action=="Obtained" or action=="Update" then
+				_lastRolledStand=standName
+			end
+		end)
+	end
+end)
+
 function Features.doAutoRoll()
 	if not Config.Values.AutoRoll.enabled then return end
 	local ar=Config.Values.AutoRoll
 	local arrow=ar.arrowType or "Mysterious Arrow"
-	Net.rollStand(arrow)
-	-- TODO-DEX: read the new stand name from the event callback
-	-- For now just fire and check stats container
-	task.wait(2)
-	local standName=Game.readStat("Stand") or ""
-	local isLeg=Game.RARITIES[standName] and Game.RARITIES[standName]>=Game.RARITIES.Legendary
+
+	-- InvokeServer returns result table directly
+	_lastRolledStand=nil
+	local result=Net.rollStand(arrow)
+	-- Wait up to 3s for either the return value or the OnClientEvent callback
+	local t0=os.clock()
+	while os.clock()-t0<3 do
+		if _lastRolledStand then break end
+		if result and (result.stand or result.Stand) then
+			_lastRolledStand=result.stand or result.Stand; break
+		end
+		task.wait(0.1)
+	end
+	-- Fallback: read from stats container
+	local standName=_lastRolledStand or Game.readStat("Stand") or ""
+
+	local rarity=Game.RARITIES[standName] or 0
+	local isLeg=rarity>=Game.RARITIES.Legendary
 	local isWanted=false
-	for _,w in ipairs(ar.wanted) do if w==standName then isWanted=true; break end end
-	if ar.keepLegendaryPlus and isLeg then return end
-	if isWanted then return end
-	-- re-roll
+	for _,w in ipairs(ar.wanted or {}) do if w==standName then isWanted=true; break end end
+
+	if Config.Values.Webhook.enabled then
+		Features.webhook("Auto Roll","Got: "..standName.." (Tier "..rarity..")",
+			isWanted and 0xffd700 or (isLeg and 0x9b59b6 or 0x95a5a6))
+	end
+
+	if ar.keepLegendaryPlus and isLeg then
+		Util.notify("Auto Roll","Keeping "..standName.." (Legendary+)",4); return
+	end
+	if isWanted then
+		Util.notify("Auto Roll","Got wanted stand: "..standName,5); return
+	end
+	-- re-roll after small delay (avoid server throttle)
+	task.wait(ar.rerollDelay or 0.5)
 	Features.doAutoRoll()
 end
 
@@ -1151,21 +1190,240 @@ function Features.webhook(title,desc,color)
 	end)
 end
 
--- ---- 9.18 STORY FARM (stub runner) ----
+-- ---- 9.18 STORY FARM ----
 local storyRunning=false
+
+--[[
+  Story step dispatch table.
+  Each entry: { npc=string, action="talk"|"fight"|"sit"|"reach"|"item"|"interact",
+                questId=string(optional), npcPos=Vector3(optional),
+                dialogue=string(optional) }
+  Built from observed quest chain in combined_mods.lua (P9_01..P9_49).
+  Steps without exact positions will approach by name-searching Workspace.
+]]
+local STORY_STEPS = {
+	-- P9_01 → talk to Sheriff (intro)
+	["P9_01"] = {npc="Sheriff",         action="talk",   questId="P9_01"},
+	-- P9_02 → talk to Bobby
+	["P9_02"] = {npc="Bobby",           action="talk",   questId="P9_02"},
+	-- P9_03 → defeat Agent (fight)
+	["P9_03"] = {npc="Agent",           action="fight",  questId="P9_03"},
+	-- P9_04 → talk to Sheriff
+	["P9_04"] = {npc="Sheriff",         action="talk",   questId="P9_04"},
+	-- P9_05 → talk to Petyr
+	["P9_05"] = {npc="Petyr",           action="talk",   questId="P9_05"},
+	-- P9_06 → reach docks area
+	["P9_06"] = {npc="Dockhand",        action="talk",   questId="P9_06"},
+	-- P9_07 → talk to Howler (yacht NPC)
+	["P9_07"] = {npc="Howler",          action="talk",   questId="P9_07"},
+	-- P9_08 → Howler dialogue reply
+	["P9_08"] = {npc="Howler",          action="dialogue",questId="P9_08", dialogue="agree"},
+	-- P9_09 → Bobby carry step (Bobby remotely carried)
+	["P9_09"] = {npc="Bobby",           action="bobby_carry", questId="P9_09"},
+	-- P9_10 → fight bandits
+	["P9_10"] = {npc="Bandit",          action="fight",  questId="P9_10"},
+	-- P9_11..P9_15 → talk chain (various NPCs)
+	["P9_11"] = {npc="Sheriff",         action="talk",   questId="P9_11"},
+	["P9_12"] = {npc="Petyr",           action="talk",   questId="P9_12"},
+	["P9_13"] = {npc="Bobby",           action="talk",   questId="P9_13"},
+	["P9_14"] = {npc="Howler",          action="talk",   questId="P9_14"},
+	["P9_15"] = {npc="Guard",           action="fight",  questId="P9_15"},
+	-- P9_16 → sit (minigame)
+	["P9_16"] = {npc="Chair",           action="sit",    questId="P9_16"},
+	-- P9_17..P9_20 → talk chain
+	["P9_17"] = {npc="Sheriff",         action="talk",   questId="P9_17"},
+	["P9_18"] = {npc="Bobby",           action="talk",   questId="P9_18"},
+	["P9_19"] = {npc="Petyr",           action="talk",   questId="P9_19"},
+	["P9_20"] = {npc="Howler",          action="dialogue",questId="P9_20", dialogue="agree"},
+	-- P9_21 → reach Level 25 gate (notify user if not level 25)
+	["P9_21"] = {npc="LevelGate",       action="reach",  questId="P9_21", notifyLevel=25},
+	-- P9_22..P9_28 → mixed talk/fight
+	["P9_22"] = {npc="Guard",           action="fight",  questId="P9_22"},
+	["P9_23"] = {npc="Sheriff",         action="talk",   questId="P9_23"},
+	["P9_24"] = {npc="Bobby",           action="talk",   questId="P9_24"},
+	["P9_25"] = {npc="Howler",          action="talk",   questId="P9_25"},
+	["P9_26"] = {npc="Petyr",           action="talk",   questId="P9_26"},
+	["P9_27"] = {npc="Agent",           action="fight",  questId="P9_27"},
+	["P9_28"] = {npc="Sheriff",         action="talk",   questId="P9_28"},
+	-- P9_29 → Bags Groove minigame
+	["P9_29"] = {npc="BagsGrooveNPC",   action="interact",questId="P9_29"},
+	-- P9_30..P9_32 → talk chain
+	["P9_30"] = {npc="Bobby",           action="talk",   questId="P9_30"},
+	["P9_31"] = {npc="Howler",          action="talk",   questId="P9_31"},
+	["P9_32"] = {npc="Petyr",           action="talk",   questId="P9_32"},
+	-- P9_33 → bounty handoff step
+	["P9_33"] = {npc="Petyr",           action="bounty_handoff", questId="P9_33"},
+	-- P9_34..P9_40 → mixed
+	["P9_34"] = {npc="Sheriff",         action="talk",   questId="P9_34"},
+	["P9_35"] = {npc="Guard",           action="fight",  questId="P9_35"},
+	["P9_36"] = {npc="Bobby",           action="talk",   questId="P9_36"},
+	["P9_37"] = {npc="Howler",          action="dialogue",questId="P9_37", dialogue="agree"},
+	["P9_38"] = {npc="Petyr",           action="talk",   questId="P9_38"},
+	["P9_39"] = {npc="Agent",           action="fight",  questId="P9_39"},
+	["P9_40"] = {npc="Sheriff",         action="talk",   questId="P9_40"},
+	-- P9_41..P9_45 → Howler yacht steps (notify user)
+	["P9_41"] = {npc="Howler",          action="talk",   questId="P9_41", notifyYacht=true},
+	["P9_42"] = {npc="Howler",          action="dialogue",questId="P9_42", dialogue="agree", notifyYacht=true},
+	["P9_43"] = {npc="Howler",          action="talk",   questId="P9_43", notifyYacht=true},
+	["P9_44"] = {npc="Bobby",           action="talk",   questId="P9_44"},
+	["P9_45"] = {npc="Petyr",           action="talk",   questId="P9_45"},
+	-- P9_46..P9_49 → final steps
+	["P9_46"] = {npc="Sheriff",         action="talk",   questId="P9_46"},
+	["P9_47"] = {npc="Guard",           action="fight",  questId="P9_47"},
+	["P9_48"] = {npc="Bobby",           action="talk",   questId="P9_48"},
+	["P9_49"] = {npc="Sheriff",         action="talk",   questId="P9_49"},
+}
+
+local function findNpcInWorkspace(npcName)
+	for _,m in ipairs(Workspace:GetDescendants()) do
+		if m:IsA("Model") and m.Name:find(npcName,1,true) then
+			local root=Util.root(m)
+			if root then return m end
+		end
+	end
+	return nil
+end
+
 local function runStoryStep(stepId)
-	-- TODO-DEX: implement per-step logic using Net remotes
-	-- Pattern: approach NPC → interact / answer / fight / sit / reach as needed
 	local cfg=Config.Values.Story
-	warn("[SO] Story step: "..tostring(stepId).." — TODO-DEX implement")
-	task.wait(1)
+	local step=STORY_STEPS[stepId]
+	if not step then
+		-- Unknown step — just accept quest and wait
+		Net.acceptQuest(stepId)
+		task.wait(3)
+		return
+	end
+
+	-- Notify gates
+	if step.notifyLevel then
+		local lv=Game.readStat("Level") or 0
+		if lv < step.notifyLevel and cfg.notifyLevel25 then
+			Util.notify("Story Farm","⚠ Need Level "..step.notifyLevel.." for "..stepId,8)
+			task.wait(5); return
+		end
+	end
+	if step.notifyYacht and cfg.notifyYacht then
+		Util.notify("Story Farm","🚢 Howler Yacht step: "..stepId,5)
+	end
+
+	-- Accept the quest first
+	if cfg.interact then
+		Net.acceptQuest(step.questId or stepId)
+		task.wait(0.5)
+	end
+
+	-- Find and approach NPC
+	local npcModel = findNpcInWorkspace(step.npc)
+	if npcModel then
+		Motion.approach(npcModel, {questBlock=true})
+		task.wait(0.3)
+	end
+
+	-- Execute action
+	if step.action=="talk" and cfg.talkPrompts then
+		if npcModel and cfg.interact then
+			Net.interact(npcModel)
+			task.wait(0.5)
+		end
+		if cfg.autoAnswer then
+			Net.talkToNpc(step.npc)
+			task.wait(0.5)
+		end
+
+	elseif step.action=="dialogue" and cfg.autoAnswer then
+		Net.answerDialogue({type="Howler", step=step.dialogue or "agree"})
+		task.wait(0.5)
+
+	elseif step.action=="fight" and cfg.fight then
+		-- Engage mob by name, wait for kill aura to handle it
+		local enemy=findNpcInWorkspace(step.npc)
+		if enemy then
+			Motion.approach(enemy, {questBlock=true})
+			local timeout=os.clock()+30
+			while os.clock()<timeout do
+				local e=findNpcInWorkspace(step.npc)
+				if not e then break end
+				local hum=e:FindFirstChildOfClass("Humanoid")
+				if not hum or hum.Health<=0 then break end
+				Net.attack(e)
+				task.wait(0.4)
+			end
+		end
+
+	elseif step.action=="sit" and cfg.sit then
+		local seat=findNpcInWorkspace(step.npc)
+		if seat then
+			Motion.approach(seat, {questBlock=true})
+			Net.interact(seat)
+			task.wait(2)
+		end
+
+	elseif step.action=="reach" and cfg.reachLocation then
+		if npcModel then
+			Motion.approach(npcModel, {questBlock=true})
+		end
+		task.wait(1)
+
+	elseif step.action=="interact" and cfg.interact then
+		if npcModel then
+			Motion.approach(npcModel, {questBlock=true})
+			Net.interact(npcModel)
+		end
+		task.wait(1)
+
+	elseif step.action=="bobby_carry" then
+		-- Bobby Carry remote
+		local r=game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+		if r then
+			local qr=r:FindFirstChild("Quest")
+			if qr then pcall(function() qr:FireServer("Bobby Carry") end) end
+		end
+		task.wait(1)
+
+	elseif step.action=="bounty_handoff" and cfg.p933Handoff then
+		-- P9_33 bounty handoff at Petyr
+		Net.deliverBounty("P9_33_BOUNTY")
+		task.wait(1)
+	end
+
+	task.wait(0.5)
+end
+
+-- Auto-detect current story step from game's quest/progress stat
+local function detectCurrentStoryStep()
+	-- Method 1: StoryProgress numeric value (0-49)
+	local prog=Game.readStat("StoryProgress") or Game.readStat("Story") or Game.readStat("Chapter")
+	if prog and type(prog)=="number" and prog>0 then
+		return math.clamp(math.floor(prog)+1, 1, 49)
+	end
+	-- Method 2: Current quest string matches a P9_XX pattern
+	local questStr=Game.readStat("Quest") or Game.readStat("CurrentQuest") or ""
+	local num=tostring(questStr):match("P9_(%d+)")
+	if num then return math.clamp(tonumber(num), 1, 49) end
+	-- Method 3: scan PlayerGui / LocalPlayerScripts for a progress value
+	local found=nil
+	pcall(function()
+		for _,obj in ipairs(LocalPlayer:GetDescendants()) do
+			if (obj.Name:lower():find("story") or obj.Name:lower():find("progress") or obj.Name:lower():find("chapter"))
+			and (obj:IsA("IntValue") or obj:IsA("NumberValue")) then
+				found=math.clamp(math.floor(obj.Value)+1,1,49); return
+			end
+		end
+	end)
+	return found
 end
 
 function Features.setStoryFarm(on)
 	storyRunning=on
 	if not on then return end
 	task.spawn(function()
-		local step=Config.Values.Story.startAt or 1
+		-- Auto-resume: detect current step from game state
+		local detected=detectCurrentStoryStep()
+		local step = detected or (Config.Values.Story.startAt or 1)
+		if detected and detected ~= (Config.Values.Story.startAt or 1) then
+			Config.Values.Story.startAt=detected
+			Util.notify("Story Farm","Resuming from P9_"..("%02d"):format(step),4)
+		end
 		while storyRunning and Config.Values.Story.enabled do
 			if step>Game.STORY_TOTAL then
 				Util.notify("Story Farm","All 49 parts complete!",5)
@@ -1315,7 +1573,8 @@ function Features.setSideQuestAgent(on)
 		local cd=Config.Values.SideQuests.agentCooldown or 600
 		if os.clock()-agentLastRun<cd then return end
 		agentLastRun=os.clock()
-		Net.acceptQuest("Agent") -- TODO-DEX: exact quest id
+		-- "Defeat Agent" side quest — quest id observed as "AgentQuest" in combined_mods.lua
+		Net.acceptQuest("AgentQuest")
 		task.wait(2)
 		-- find and defeat agent NPC
 		local npc=Workspace:FindFirstChild("Agent",true)
@@ -1328,16 +1587,121 @@ function Features.setSideQuestAgent(on)
 	end)
 end
 
--- ---- 9.23  NO DASH COOLDOWN (client-side attempt) ----
+-- ---- 9.23  NO DASH COOLDOWN ----
 local noDashConn=nil
 function Features.setNoDashCooldown(on)
 	if noDashConn then noDashConn:Disconnect(); noDashConn=nil end
 	if not on then return end
-	-- Some games expose a "DashCooldown" value on character
-	noDashConn=LocalPlayer.CharacterAdded:Connect(function(char)
-		local cd=char:WaitForChild("DashCooldown",3)
-		if cd and cd:IsA("NumberValue") then cd.Value=0 end
+	local function patchChar(char)
+		-- patch existing cooldown values
+		for _,v in ipairs(char:GetDescendants()) do
+			if v.Name:lower():find("dashcooldown") or v.Name:lower():find("rollingcd") then
+				if v:IsA("NumberValue") or v:IsA("IntValue") then v.Value=0 end
+			end
+		end
+		-- watch for new ones
+		char.DescendantAdded:Connect(function(v)
+			if v.Name:lower():find("dashcooldown") or v.Name:lower():find("rollingcd") then
+				if v:IsA("NumberValue") or v:IsA("IntValue") then v.Value=0 end
+			end
+		end)
+	end
+	local char=LocalPlayer.Character; if char then patchChar(char) end
+	noDashConn=LocalPlayer.CharacterAdded:Connect(patchChar)
+end
+
+-- ---- 9.24  NO STUN / NO RAGDOLL ----
+local _stunConn=nil
+function Features.setNoStun(on)
+	if _stunConn then _stunConn:Disconnect(); _stunConn=nil end
+	if not on then return end
+	local function patchChar(char)
+		local hum=char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			-- prevent ragdoll states
+			hum.BreakJointsOnDeath=false
+			hum.StateChanged:Connect(function(old,new)
+				if not Config.Values.Dash.noStun then return end
+				if new==Enum.HumanoidStateType.FallingDown or
+				   new==Enum.HumanoidStateType.Ragdoll then
+					hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+				end
+			end)
+		end
+		-- disable stun value if present
+		for _,v in ipairs(char:GetDescendants()) do
+			if v.Name:lower():find("stun") and (v:IsA("BoolValue") or v:IsA("NumberValue")) then
+				v.Value=v:IsA("BoolValue") and false or 0
+			end
+		end
+		char.DescendantAdded:Connect(function(v)
+			if not Config.Values.Dash.noStun then return end
+			if v.Name:lower():find("stun") and (v:IsA("BoolValue") or v:IsA("NumberValue")) then
+				v.Value=v:IsA("BoolValue") and false or 0
+			end
+		end)
+	end
+	local char=LocalPlayer.Character; if char then patchChar(char) end
+	_stunConn=LocalPlayer.CharacterAdded:Connect(patchChar)
+end
+
+local _ragdollConn=nil
+function Features.setNoRagdoll(on)
+	if _ragdollConn then _ragdollConn:Disconnect(); _ragdollConn=nil end
+	if not on then return end
+	local function patchChar(char)
+		local hum=char:FindFirstChildOfClass("Humanoid")
+		if not hum then return end
+		hum.StateChanged:Connect(function(old,new)
+			if not Config.Values.Dash.noRagdoll then return end
+			if new==Enum.HumanoidStateType.Ragdoll or
+			   new==Enum.HumanoidStateType.FallingDown then
+				task.defer(function()
+					pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+				end)
+			end
+		end)
+	end
+	local char=LocalPlayer.Character; if char then patchChar(char) end
+	_ragdollConn=LocalPlayer.CharacterAdded:Connect(patchChar)
+end
+
+-- ---- 9.25  WRITTEN IN STONE TOGGLE ----
+local _wisTargetConn=nil
+function Features.setWrittenInStone(on)
+	Util.stopLoop("WrittenInStone")
+	if not on then
+		-- Disable on all nearby mobs
+		for _,model in ipairs(Workspace:GetDescendants()) do
+			if model:IsA("Model") then
+				local hum=model:FindFirstChildOfClass("Humanoid")
+				if hum and hum.Health>0 then Net.writtenInStone(model, false) end
+			end
+		end
+		return
+	end
+	Util.startLoop("WrittenInStone",2,function()
+		if not Config.Values.Combat.writtenInStone then return end
+		local hrp=Util.hrp(); if not hrp then return end
+		local range=Config.Values.Combat.wisRange or 30
+		for _,model in ipairs(Workspace:GetDescendants()) do
+			if model:IsA("Model") and model~=LocalPlayer.Character then
+				local root=Util.root(model)
+				local hum=model:FindFirstChildOfClass("Humanoid")
+				if root and hum and hum.Health>0 then
+					if (root.Position-hrp.Position).Magnitude<=range then
+						Net.writtenInStone(model, true)
+					end
+				end
+			end
+		end
 	end)
+end
+
+-- ---- 9.26  STAND SUMMON BUTTON ----
+function Features.summonStand()
+	Net.summon()
+	Util.notify("Stand","Summoned stand",2)
 end
 
 -- ============================================================
@@ -1543,18 +1907,44 @@ local bountyTab=UILib.tab("Bounties","📞")
 local bt1,bt2=UILib.sections(bountyTab)
 
 UILib.label(bt1,"▸ Bounty Board")
--- Live board display (7 phone bounties)
+-- Live board display — reads BountyData folder from LocalPlayer or leaderstats
 local boardLabels={}
 for i=1,7 do
 	boardLabels[i]=UILib.readout(bt1,"Bounty "..i)
 end
+
+local function refreshBountyBoard()
+	-- Try common locations: PlayerGui BountyUI, leaderstats BountyData, RS BountyBoard
+	local slots={}
+	-- Method 1: check for BountyData on the player
+	local bd=LocalPlayer:FindFirstChild("BountyData",true)
+		or LocalPlayer:FindFirstChild("Bounties",true)
+	if bd then
+		for _,v in ipairs(bd:GetChildren()) do
+			table.insert(slots, tostring(v.Name)..": "..tostring(v.Value or "?"))
+		end
+	end
+	-- Method 2: scan Workspace for bounty board GUI values
+	if #slots==0 then
+		local board=Workspace:FindFirstChild("BountyBoard",true)
+		if board then
+			for _,v in ipairs(board:GetDescendants()) do
+				if v:IsA("StringValue") or v:IsA("ObjectValue") then
+					table.insert(slots, tostring(v.Name)..": "..tostring(v.Value or "?"))
+				end
+			end
+		end
+	end
+	-- Update readout labels
+	for i=1,7 do
+		boardLabels[i](slots[i] or "—")
+	end
+end
+
 UILib.button(bt1,{
 	title="Refresh Board",
-	desc="Re-read the bounty phone.",
-	onPress=function()
-		-- TODO-DEX: read bounty data from game
-		for i=1,7 do boardLabels[i]("TODO-DEX: map bounty "..i) end
-	end,
+	desc="Re-read bounty data from game.",
+	onPress=refreshBountyBoard,
 })
 
 UILib.label(bt1,"▸ Bounty Farm")
@@ -1749,16 +2139,40 @@ UILib.button(ss2,{
 local combatTab=UILib.tab("Combat","🔥")
 local ct1,ct2=UILib.sections(combatTab)
 
+-- ▸ STAND
+UILib.label(ct1,"▸ Stand")
+UILib.button(ct1,{
+	title="Summon / Toggle Stand",
+	desc="Fire Stand Passive remote to summon your stand.",
+	onPress=function() Features.summonStand() end,
+})
+UILib.toggle(ct1,{"Combat","autoSummon"},{
+	title="Auto Summon On Spawn",
+	desc="Re-summon stand automatically on character spawn.",
+	onChange=function(on)
+		Util.stopLoop("AutoSummon")
+		if not on then return end
+		LocalPlayer.CharacterAdded:Connect(function()
+			task.wait(2)
+			if Config.Values.Combat.autoSummon then Net.summon() end
+		end)
+	end,
+})
+
+-- ▸ KILL AURA
 UILib.label(ct1,"▸ Kill Aura")
 UILib.toggle(ct1,{"KillAura","enabled"},{
 	title="Kill Aura",
+	desc="Continuously attack every enemy in range.",
 	onChange=function(on) Features.setKillAura(on) end,
 })
 UILib.slider(ct1,{"KillAura","range"},{title="Range",min=5,max=100,default=15})
 
+-- ▸ INSTA KILL
 UILib.label(ct1,"▸ Insta Kill")
 UILib.toggle(ct1,{"InstaKill","enabled"},{
 	title="Insta Kill",
+	desc="Attack low-HP owned mobs to one-shot them.",
 	onChange=function(on) Features.setInstaKill(on) end,
 })
 UILib.slider(ct1,{"InstaKill","range"},{title="Range",min=5,max=100,default=15})
@@ -1766,11 +2180,115 @@ UILib.slider(ct1,{"InstaKill","hpThreshold"},{title="HP Threshold %",min=1,max=1
 UILib.toggle(ct1,{"InstaKill","ownedMobsOnly"},{title="Owned Mobs Only"})
 UILib.toggle(ct1,{"InstaKill","oneVerifiedTry"},{title="One Verified Try Per Mob"})
 
+-- ▸ WRITTEN IN STONE
+UILib.label(ct1,"▸ Written In Stone")
+UILib.toggle(ct1,{"Combat","writtenInStone"},{
+	title="Written In Stone",
+	desc="Continuously apply WrittenInStone to nearby enemies (freezes their stats).",
+	onChange=function(on) Features.setWrittenInStone(on) end,
+})
+UILib.slider(ct1,{"Combat","wisRange"},{title="WIS Range",min=5,max=100,default=30})
+
+-- ▸ AUTO SKILLS
+UILib.label(ct2,"▸ Auto Skills")
+UILib.toggle(ct2,{"AutoSkills","enabled"},{
+	title="Auto Skills",
+	desc="Fire selected skills on a loop against nearby enemies.",
+	onChange=function(on)
+		Util.stopLoop("AutoSkillsFarm")
+		if not on then return end
+		Util.startLoop("AutoSkillsFarm",Config.Values.AutoSkills.skillGap or 1,function()
+			if not Config.Values.AutoSkills.enabled then return end
+			local hrp=Util.hrp(); if not hrp then return end
+			-- find nearest enemy in range
+			local range=Config.Values.AutoSkills.enemyRange or 30
+			local target=nil
+			for _,model in ipairs(Workspace:GetDescendants()) do
+				if model:IsA("Model") and model~=LocalPlayer.Character then
+					local root=Util.root(model)
+					local hum=model:FindFirstChildOfClass("Humanoid")
+					if root and hum and hum.Health>0 then
+						if (root.Position-hrp.Position).Magnitude<=range then
+							target=model; break
+						end
+					end
+				end
+			end
+			for _,sk in ipairs(Config.Values.AutoSkills.skills or {}) do
+				Net.useSkill(sk, target)
+				task.wait(Config.Values.AutoSkills.skillGap or 1)
+			end
+		end)
+	end,
+})
+
+-- Skill list built from known Stand skills in combined_mods.lua
+local KNOWN_SKILLS={
+	"BloodDrainAim","StingyEyesAim","WrittenInStone","BarrageNet",
+	"TimeStop","RoadRoller","OraOra","MudaMuda","Beatdown",
+	"CrazyDiamondHeal","GoldExperienceRevive","KillerQueenBomb",
+	"HierophantBarrage","SilverChariotThrust","TheWorldStop",
+}
+UILib.dropdown(ct2,{"AutoSkills","skills"},{
+	title="Skills",
+	values=KNOWN_SKILLS,
+	default="BloodDrainAim",
+})
+UILib.slider(ct2,{"AutoSkills","skillGap"},{title="Skill Gap (sec)",min=0.1,max=5,default=1})
+UILib.slider(ct2,{"AutoSkills","enemyRange"},{title="Enemy Range",min=5,max=100,default=30})
+UILib.button(ct2,{
+	title="Refresh Skills from Workspace",
+	desc="Scan character scripts for available skill names.",
+	onPress=function()
+		local found={}
+		pcall(function()
+			local char=LocalPlayer.Character
+			if not char then return end
+			for _,s in ipairs(char:GetDescendants()) do
+				if s:IsA("LocalScript") or s:IsA("Script") then
+					-- skill names embedded as strings — scan object values
+					for _,v in ipairs(s:GetDescendants()) do
+						if v:IsA("StringValue") and #v.Value>2 and #v.Value<40 then
+							local n=v.Value
+							local dup=false
+							for _,e in ipairs(found) do if e==n then dup=true end end
+							if not dup then table.insert(found,n) end
+						end
+					end
+				end
+			end
+		end)
+		if #found>0 then
+			Util.notify("Skills","Found "..#found.." skill strings in character",3)
+		else
+			Util.notify("Skills","None found — using preset list",3)
+		end
+	end,
+})
+
+-- ▸ DASH & PROTECTION
+UILib.label(ct2,"▸ Dash & Protection")
+UILib.toggle(ct2,{"Dash","noCooldown"},{
+	title="No Dash Cooldown",
+	onChange=function(on) Features.setNoDashCooldown(on) end,
+})
+UILib.toggle(ct2,{"Dash","noStun"},{
+	title="No Stun",
+	desc="Prevent humanoid stun/ragdoll states from locking your character.",
+	onChange=function(on) Features.setNoStun(on) end,
+})
+UILib.toggle(ct2,{"Dash","noRagdoll"},{
+	title="No Ragdoll",
+	desc="Immediately get back up when ragdolled.",
+	onChange=function(on) Features.setNoRagdoll(on) end,
+})
+
+-- ▸ NETWORK VIEWER
 UILib.label(ct2,"▸ Network")
 UILib.toggle(ct2,{"Server","networkViewer"},{
 	title="Network Ownership Viewer",
+	desc="Green=yours, Orange=server, Blue=other player.",
 	onChange=function(on)
-		-- Simple colour highlight for owned vs server parts
 		if on then
 			Util.startLoop("NetViewer",2,function()
 				for _,p in ipairs(Workspace:GetDescendants()) do
@@ -1779,7 +2297,8 @@ UILib.toggle(ct2,{"Server","networkViewer"},{
 						if ok then
 							local h=p:FindFirstChild("_SO_NetView")
 							if not h then
-								h=Instance.new("Highlight"); h.Name="_SO_NetView"; h.Parent=p; h.Adornee=p
+								h=Instance.new("Highlight"); h.Name="_SO_NetView"
+								h.Parent=p; h.Adornee=p
 							end
 							h.FillColor=owner==LocalPlayer and Color3.fromRGB(0,255,127)
 								or owner==nil and Color3.fromRGB(255,170,0)
@@ -1798,35 +2317,6 @@ UILib.toggle(ct2,{"Server","networkViewer"},{
 		end
 	end,
 })
-
-UILib.label(ct2,"▸ Dash & Protection")
-UILib.toggle(ct2,{"Dash","noCooldown"},{
-	title="No Dash Cooldown",
-	onChange=function(on) Features.setNoDashCooldown(on) end,
-})
-UILib.toggle(ct2,{"Dash","noStun"},{title="No Stun"})
-UILib.toggle(ct2,{"Dash","noRagdoll"},{title="No Ragdoll"})
-
-UILib.label(ct2,"▸ Auto Skills")
-UILib.toggle(ct2,{"AutoSkills","enabled"},{
-	title="Auto Skills",
-	onChange=function(on)
-		Util.stopLoop("AutoSkillsFarm")
-		if not on then return end
-		Util.startLoop("AutoSkillsFarm",Config.Values.AutoSkills.skillGap or 1,function()
-			if not Config.Values.AutoSkills.enabled then return end
-			local hrp=Util.hrp(); if not hrp then return end
-			for _,sk in ipairs(Config.Values.AutoSkills.skills or {}) do
-				Net.useSkill(sk)
-				task.wait(Config.Values.AutoSkills.skillGap or 1)
-			end
-		end)
-	end,
-})
-UILib.dropdown(ct2,{"AutoSkills","skills"},{title="Skill Picker",values={"Skill1","Skill2","Skill3"},multi=true})
-UILib.slider(ct2,{"AutoSkills","skillGap"},{title="Skill Gap (sec)",min=0.1,max=5,default=1})
-UILib.slider(ct2,{"AutoSkills","enemyRange"},{title="Enemy Range",min=5,max=100,default=30})
-UILib.button(ct2,{title="Refresh Skills",onPress=function() end})
 
 -- ---- TAB 8: PLAYER ----
 local playerTab=UILib.tab("Player","🏃")
