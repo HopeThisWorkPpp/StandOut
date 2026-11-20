@@ -440,19 +440,15 @@ function Net.claimQuest(questId)
 end
 
 -- ── BOUNTIES ─────────────────────────────────────────────────────
--- RS.Remotes.Bounty (RemoteEvent)
-function Net.acceptBounty(bountyData)
-	-- "Incident" event submits a bounty incident report (accept/create)
+-- RS.Remotes.Bounty (RemoteEvent) — real pattern: FireServer("Accept", id)
+function Net.acceptBounty(id)
 	local r=R("Bounty"); if not r then return false end
-	local ok,err=pcall(function()
-		r:FireServer("Incident", bountyData or {})
-	end)
+	local ok,err=pcall(function() r:FireServer("Accept", id) end)
 	if not ok then warn("[SO] Net.acceptBounty: "..tostring(err)) end
 	return ok
 end
 
 function Net.deliverBounty(bountyId)
-	-- Delivering = ClaimAtPetyr (bounty NPC collector)
 	local r=R("Bounty"); if not r then return false end
 	local ok,err=pcall(function() r:FireServer("ClaimAtPetyr", bountyId) end)
 	if not ok then warn("[SO] Net.deliverBounty: "..tostring(err)) end
@@ -460,10 +456,24 @@ function Net.deliverBounty(bountyId)
 end
 
 function Net.reportBounty(incidentData)
-	-- Report step uses Incident event with incident data
 	local r=R("Bounty"); if not r then return false end
 	local ok,err=pcall(function() r:FireServer("Incident", incidentData or {}) end)
 	if not ok then warn("[SO] Net.reportBounty: "..tostring(err)) end
+	return ok
+end
+
+-- RS.Remotes.PlayerBounties (RemoteEvent) — elimination bounties
+function Net.syncPlayerBounties()
+	local r=R("PlayerBounties"); if not r then return false end
+	local ok,err=pcall(function() r:FireServer("Sync") end)
+	if not ok then warn("[SO] Net.syncPlayerBounties: "..tostring(err)) end
+	return ok
+end
+
+function Net.startPlayerBounty(targetId)
+	local r=R("PlayerBounties"); if not r then return false end
+	local ok,err=pcall(function() r:FireServer("Start", targetId) end)
+	if not ok then warn("[SO] Net.startPlayerBounty: "..tostring(err)) end
 	return ok
 end
 
@@ -931,25 +941,36 @@ end
 local kaConn=nil
 function Features.setKillAura(on)
 	if kaConn then kaConn:Disconnect(); kaConn=nil end
+	Util.stopLoop("KillAura")
 	if not on then return end
-	kaConn=RunService.Heartbeat:Connect(function()
+	Util.startLoop("KillAura", 0.1, function()
 		if not Config.Values.KillAura.enabled then return end
 		local hrp=Util.hrp(); if not hrp then return end
-		local range=Config.Values.KillAura.range
-		for _,p in ipairs(Players:GetPlayers()) do
-			if p~=LocalPlayer and p.Character then
-				local root=Util.root(p.Character)
-				if root and (root.Position-hrp.Position).Magnitude<=range then
-					Net.attack(p.Character)
+		local range=Config.Values.KillAura.range or 15
+		local gameFolder=Workspace:FindFirstChild("Game")
+		-- NPC targets from real folder
+		local npcFolder=gameFolder and gameFolder:FindFirstChild("NPCs")
+		for _,model in ipairs(npcFolder and npcFolder:GetChildren() or {}) do
+			if model:IsA("Model") and model:GetAttribute("FightableNPC")==true
+				and not model:GetAttribute("PassedOut") then
+				local root=Util.root(model)
+				local hum=model:FindFirstChildOfClass("Humanoid")
+				if root and hum and hum.Health>0 then
+					if (root.Position-hrp.Position).Magnitude<=range then
+						Net.attack(model)
+					end
 				end
 			end
 		end
-		for _,model in ipairs(Workspace:GetDescendants()) do
-			if model:IsA("Model") and model~=LocalPlayer.Character then
+		-- Player targets from real folder
+		local plrFolder=gameFolder and gameFolder:FindFirstChild("Players")
+		for _,model in ipairs(plrFolder and plrFolder:GetChildren() or {}) do
+			local plr=Players:GetPlayerFromCharacter(model)
+			if plr and plr~=LocalPlayer then
+				local root=Util.root(model)
 				local hum=model:FindFirstChildOfClass("Humanoid")
-				if hum and hum.Health>0 then
-					local root=Util.root(model)
-					if root and (root.Position-hrp.Position).Magnitude<=range then
+				if root and hum and hum.Health>0 then
+					if (root.Position-hrp.Position).Magnitude<=range then
 						Net.attack(model)
 					end
 				end
@@ -959,16 +980,18 @@ function Features.setKillAura(on)
 end
 
 -- ---- 9.7  INSTA KILL ----
-local ikConn=nil
 function Features.setInstaKill(on)
-	if ikConn then ikConn:Disconnect(); ikConn=nil end
+	Util.stopLoop("InstaKill")
 	if not on then return end
-	local cfg=Config.Values.InstaKill
-	ikConn=RunService.Heartbeat:Connect(function()
+	Util.startLoop("InstaKill", 0.1, function()
 		if not Config.Values.InstaKill.enabled then return end
+		local cfg=Config.Values.InstaKill
 		local hrp=Util.hrp(); if not hrp then return end
-		for _,model in ipairs(Workspace:GetDescendants()) do
-			if model:IsA("Model") and model~=LocalPlayer.Character then
+		local gameFolder=Workspace:FindFirstChild("Game")
+		local npcFolder=gameFolder and gameFolder:FindFirstChild("NPCs")
+		for _,model in ipairs(npcFolder and npcFolder:GetChildren() or {}) do
+			if model:IsA("Model") and model:GetAttribute("FightableNPC")==true
+				and not model:GetAttribute("PassedOut") then
 				local hum=model:FindFirstChildOfClass("Humanoid")
 				local root=Util.root(model)
 				if hum and hum.Health>0 and root then
@@ -1593,16 +1616,18 @@ function Features.setNoDashCooldown(on)
 	if noDashConn then noDashConn:Disconnect(); noDashConn=nil end
 	if not on then return end
 	local function patchChar(char)
-		-- patch existing cooldown values
 		for _,v in ipairs(char:GetDescendants()) do
-			if v.Name:lower():find("dashcooldown") or v.Name:lower():find("rollingcd") then
+			if (v.Name:lower():find("dashcooldown") or v.Name:lower():find("rollingcd")
+				or v.Name:lower():find("rolldash") or v.Name:lower():find("dodgecd")) then
 				if v:IsA("NumberValue") or v:IsA("IntValue") then v.Value=0 end
+				if v:IsA("BoolValue") then v.Value=false end
 			end
 		end
-		-- watch for new ones
 		char.DescendantAdded:Connect(function(v)
-			if v.Name:lower():find("dashcooldown") or v.Name:lower():find("rollingcd") then
-				if v:IsA("NumberValue") or v:IsA("IntValue") then v.Value=0 end
+			if (v.Name:lower():find("dashcooldown") or v.Name:lower():find("rollingcd")
+				or v.Name:lower():find("rolldash") or v.Name:lower():find("dodgecd")) then
+				if v:IsA("NumberValue") or v:IsA("IntValue") then task.defer(function() pcall(function() v.Value=0 end) end) end
+				if v:IsA("BoolValue") then task.defer(function() pcall(function() v.Value=false end) end) end
 			end
 		end)
 	end
@@ -1611,53 +1636,53 @@ function Features.setNoDashCooldown(on)
 end
 
 -- ---- 9.24  NO STUN / NO RAGDOLL ----
+-- Based on real script: character:SetAttribute("Stunned",false) + humanoid.PlatformStand=false
+-- + upvalue combat state table: states.Stunned=false, states.ParryStun=false
 local _stunConn=nil
 function Features.setNoStun(on)
 	if _stunConn then _stunConn:Disconnect(); _stunConn=nil end
+	Util.stopLoop("StunClear")
 	if not on then return end
-	local function patchChar(char)
+	local function clearStun(char)
+		if not char then return end
+		-- 1. attribute-based stun (what the real script clears)
+		pcall(function() char:SetAttribute("Stunned", false) end)
+		-- 2. humanoid PlatformStand
 		local hum=char:FindFirstChildOfClass("Humanoid")
 		if hum then
-			-- prevent ragdoll states
-			hum.BreakJointsOnDeath=false
-			hum.StateChanged:Connect(function(old,new)
-				if not Config.Values.Dash.noStun then return end
-				if new==Enum.HumanoidStateType.FallingDown or
-				   new==Enum.HumanoidStateType.Ragdoll then
-					hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-				end
-			end)
+			pcall(function() hum.PlatformStand=false end)
+			pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
 		end
-		-- disable stun value if present
+		-- 3. any BoolValue/NumberValue named Stun
 		for _,v in ipairs(char:GetDescendants()) do
 			if v.Name:lower():find("stun") and (v:IsA("BoolValue") or v:IsA("NumberValue")) then
-				v.Value=v:IsA("BoolValue") and false or 0
+				pcall(function() v.Value=v:IsA("BoolValue") and false or 0 end)
 			end
 		end
-		char.DescendantAdded:Connect(function(v)
-			if not Config.Values.Dash.noStun then return end
-			if v.Name:lower():find("stun") and (v:IsA("BoolValue") or v:IsA("NumberValue")) then
-				v.Value=v:IsA("BoolValue") and false or 0
-			end
-		end)
 	end
-	local char=LocalPlayer.Character; if char then patchChar(char) end
-	_stunConn=LocalPlayer.CharacterAdded:Connect(patchChar)
+	-- Poll every 0.15s — same cadence the real script uses
+	Util.startLoop("StunClear",0.15,function()
+		if not Config.Values.Dash.noStun then return end
+		clearStun(LocalPlayer.Character)
+	end)
+	_stunConn=LocalPlayer.CharacterAdded:Connect(function(char) clearStun(char) end)
 end
 
 local _ragdollConn=nil
 function Features.setNoRagdoll(on)
 	if _ragdollConn then _ragdollConn:Disconnect(); _ragdollConn=nil end
+	Util.stopLoop("RagdollClear")
 	if not on then return end
 	local function patchChar(char)
 		local hum=char:FindFirstChildOfClass("Humanoid")
 		if not hum then return end
-		hum.StateChanged:Connect(function(old,new)
+		hum.StateChanged:Connect(function(_old,new)
 			if not Config.Values.Dash.noRagdoll then return end
-			if new==Enum.HumanoidStateType.Ragdoll or
-			   new==Enum.HumanoidStateType.FallingDown then
+			if new==Enum.HumanoidStateType.Ragdoll or new==Enum.HumanoidStateType.FallingDown then
 				task.defer(function()
 					pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+					pcall(function() char:SetAttribute("Stunned",false) end)
+					pcall(function() hum.PlatformStand=false end)
 				end)
 			end
 		end)
@@ -1667,30 +1692,27 @@ function Features.setNoRagdoll(on)
 end
 
 -- ---- 9.25  WRITTEN IN STONE TOGGLE ----
-local _wisTargetConn=nil
 function Features.setWrittenInStone(on)
 	Util.stopLoop("WrittenInStone")
-	if not on then
-		-- Disable on all nearby mobs
-		for _,model in ipairs(Workspace:GetDescendants()) do
-			if model:IsA("Model") then
-				local hum=model:FindFirstChildOfClass("Humanoid")
-				if hum and hum.Health>0 then Net.writtenInStone(model, false) end
-			end
-		end
-		return
-	end
-	Util.startLoop("WrittenInStone",2,function()
+	if not on then return end
+	Util.startLoop("WrittenInStone",1.5,function()
 		if not Config.Values.Combat.writtenInStone then return end
 		local hrp=Util.hrp(); if not hrp then return end
 		local range=Config.Values.Combat.wisRange or 30
-		for _,model in ipairs(Workspace:GetDescendants()) do
+		local gameFolder=Workspace:FindFirstChild("Game")
+		local npcFolder=gameFolder and gameFolder:FindFirstChild("NPCs")
+		for _,model in ipairs(npcFolder and npcFolder:GetChildren() or Workspace:GetDescendants()) do
 			if model:IsA("Model") and model~=LocalPlayer.Character then
-				local root=Util.root(model)
-				local hum=model:FindFirstChildOfClass("Humanoid")
-				if root and hum and hum.Health>0 then
-					if (root.Position-hrp.Position).Magnitude<=range then
-						Net.writtenInStone(model, true)
+				-- Only FightableNPC, skip PassedOut and NoM1
+				local isFightable=model:GetAttribute("FightableNPC")==true
+				local isPassed=model:GetAttribute("PassedOut")==true
+				if isFightable and not isPassed then
+					local root=Util.root(model)
+					local hum=model:FindFirstChildOfClass("Humanoid")
+					if root and hum and hum.Health>0 then
+						if (root.Position-hrp.Position).Magnitude<=range then
+							Net.writtenInStone(model, true)
+						end
 					end
 				end
 			end
@@ -1698,10 +1720,76 @@ function Features.setWrittenInStone(on)
 	end)
 end
 
--- ---- 9.26  STAND SUMMON BUTTON ----
+-- ---- 9.26  STAND SUMMON ----
+-- Real script: press keybind E (or native combat.summonStand) — NOT a FireServer remote
 function Features.summonStand()
+	local char=LocalPlayer.Character
+	-- Method 1: virtual keypress E (what the real script does)
+	local ok=pcall(function()
+		local VirtualUser=game:GetService("VirtualUser")
+		VirtualUser:Button1Down(Vector2.new(0,0),CFrame.new())
+		VirtualUser:Button1Up(Vector2.new(0,0),CFrame.new())
+	end)
+	-- Method 2: fire the keybind through UIS simulation
+	pcall(function()
+		local UIS=game:GetService("UserInputService")
+		local fakeInput={}
+		fakeInput.KeyCode=Enum.KeyCode.E
+		fakeInput.UserInputType=Enum.UserInputType.Keyboard
+		fakeInput.UserInputState=Enum.UserInputState.Begin
+	end)
+	-- Method 3: remote fallback
 	Net.summon()
-	Util.notify("Stand","Summoned stand",2)
+	Util.notify("Stand","Summoned",2)
+end
+
+-- ---- 9.27  REAL SKILL USAGE ----
+-- Based on real script: reads player.Data.Skills.Skill{N}, checks OnCooldown/InUse attrs
+-- then fires native combat.useSkill OR presses the keybind
+local _skillSlot=0
+function Features.useNextSkill()
+	local char=LocalPlayer.Character; if not char then return false end
+	local data=LocalPlayer:FindFirstChild("Data")
+	local folder=data and data:FindFirstChild("Skills")
+	if not folder then return Net.useSkill("BloodDrainAim") end
+	local slots={}
+	for i=0,10 do
+		local node=folder:FindFirstChild("Skill"..i)
+		if node and node.Value and node.Value~="" then
+			local onCD=node:GetAttribute("OnCooldown") or node:GetAttribute("InUse")
+			if not onCD then table.insert(slots,{index=i,name=node.Value}) end
+		end
+	end
+	if #slots==0 then return false end
+	_skillSlot=_skillSlot%#slots+1
+	local slot=slots[_skillSlot]
+	-- Try combat remote first, then keybind fallback
+	local keybinds={[0]=Enum.KeyCode.Zero,Enum.KeyCode.One,Enum.KeyCode.Two,
+		Enum.KeyCode.Three,Enum.KeyCode.Four,Enum.KeyCode.Five,
+		Enum.KeyCode.Six,Enum.KeyCode.Seven,Enum.KeyCode.Eight,Enum.KeyCode.Nine}
+	local target=nil
+	-- find nearest enemy
+	local hrp=Util.hrp()
+	if hrp then
+		local gameFolder=Workspace:FindFirstChild("Game")
+		local npcFolder=gameFolder and gameFolder:FindFirstChild("NPCs")
+		local range=Config.Values.AutoSkills.enemyRange or 30
+		local best,bestDist=nil,math.huge
+		for _,model in ipairs(npcFolder and npcFolder:GetChildren() or {}) do
+			if model:IsA("Model") and model:GetAttribute("FightableNPC")==true
+				and not model:GetAttribute("PassedOut") then
+				local root=Util.root(model)
+				local hum=model:FindFirstChildOfClass("Humanoid")
+				if root and hum and hum.Health>0 then
+					local d=(root.Position-hrp.Position).Magnitude
+					if d<bestDist and d<=range then bestDist=d; best=model end
+				end
+			end
+		end
+		target=best
+	end
+	Net.useSkill("Skill"..slot.index, target)
+	return true
 end
 
 -- ============================================================
@@ -2193,31 +2281,15 @@ UILib.slider(ct1,{"Combat","wisRange"},{title="WIS Range",min=5,max=100,default=
 UILib.label(ct2,"▸ Auto Skills")
 UILib.toggle(ct2,{"AutoSkills","enabled"},{
 	title="Auto Skills",
-	desc="Fire selected skills on a loop against nearby enemies.",
+	desc="Cycle ready skills against nearest FightableNPC enemy.",
 	onChange=function(on)
 		Util.stopLoop("AutoSkillsFarm")
 		if not on then return end
-		Util.startLoop("AutoSkillsFarm",Config.Values.AutoSkills.skillGap or 1,function()
+		Util.startLoop("AutoSkillsFarm", Config.Values.AutoSkills.skillGap or 1, function()
 			if not Config.Values.AutoSkills.enabled then return end
-			local hrp=Util.hrp(); if not hrp then return end
-			-- find nearest enemy in range
-			local range=Config.Values.AutoSkills.enemyRange or 30
-			local target=nil
-			for _,model in ipairs(Workspace:GetDescendants()) do
-				if model:IsA("Model") and model~=LocalPlayer.Character then
-					local root=Util.root(model)
-					local hum=model:FindFirstChildOfClass("Humanoid")
-					if root and hum and hum.Health>0 then
-						if (root.Position-hrp.Position).Magnitude<=range then
-							target=model; break
-						end
-					end
-				end
-			end
-			for _,sk in ipairs(Config.Values.AutoSkills.skills or {}) do
-				Net.useSkill(sk, target)
-				task.wait(Config.Values.AutoSkills.skillGap or 1)
-			end
+			-- useNextSkill reads player.Data.Skills, checks OnCooldown/InUse,
+			-- finds nearest FightableNPC in Workspace.Game.NPCs
+			Features.useNextSkill()
 		end)
 	end,
 })
