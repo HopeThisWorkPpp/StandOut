@@ -1412,51 +1412,105 @@ local function runStoryStep(stepId)
 	task.wait(0.5)
 end
 
--- Auto-detect current story step from game's quest/progress stat
+-- Auto-detect current story step from ACTIVE quests on the player
+-- Priority: real active P9_XX quest > TrackedQuest > QuestObjectives > Data attrs > stats
 local function detectCurrentStoryStep()
-	-- Method 1: StoryProgress numeric value (0-49)
-	local prog=Game.readStat("StoryProgress") or Game.readStat("Story") or Game.readStat("Chapter")
-	if prog and type(prog)=="number" and prog>0 then
-		return math.clamp(math.floor(prog)+1, 1, 49)
+	-- Method 1: Check QuestObjectives folder under Data for any active P9_XX quest
+	-- This is where the game actually stores which story quests are in-progress
+	local data = LocalPlayer:FindFirstChild("Data")
+	if data then
+		-- QuestObjectives subfolder holds active quest IDs as children
+		local objs = data:FindFirstChild("QuestObjectives")
+			or data:FindFirstChild("Quests")
+			or data:FindFirstChild("ActiveQuests")
+		if objs then
+			local highest = nil
+			for _, child in ipairs(objs:GetChildren()) do
+				local n = tostring(child.Name)
+				local num = n:match("^P9_(%d+)")
+				if num then
+					local v = tonumber(num)
+					if not highest or v > highest then highest = v end
+				end
+			end
+			if highest then return math.clamp(highest, 1, 49) end
+		end
+
+		-- Also check flat attributes on Data for P9 progress
+		for _, attrName in ipairs({"StoryProgress","StoryStep","Chapter","StoryQuest","QuestProgress"}) do
+			local v = data:GetAttribute(attrName)
+			if v and type(v) == "number" and v > 0 then
+				return math.clamp(math.floor(v), 1, 49)
+			end
+		end
 	end
-	-- Method 2: Current quest string matches a P9_XX pattern
-	local questStr=Game.readStat("Quest") or Game.readStat("CurrentQuest") or ""
-	local num=tostring(questStr):match("P9_(%d+)")
-	if num then return math.clamp(tonumber(num), 1, 49) end
-	-- Method 3: scan PlayerGui / LocalPlayerScripts for a progress value
-	local found=nil
+
+	-- Method 2: TrackedQuest attribute on LocalPlayer (what the HUD currently shows)
+	local tracked = LocalPlayer:GetAttribute("TrackedQuest") or LocalPlayer:GetAttribute("CurrentQuest")
+	if tracked then
+		local num = tostring(tracked):match("P9_(%d+)")
+		if num then return math.clamp(tonumber(num), 1, 49) end
+	end
+
+	-- Method 3: leaderstats / stat values
+	local prog = Game.readStat("StoryProgress") or Game.readStat("Story") or Game.readStat("Chapter")
+	if prog and type(prog) == "number" and prog > 0 then
+		return math.clamp(math.floor(prog), 1, 49)
+	end
+
+	-- Method 4: Scan all player descendants for IntValue/StringValue named after P9_
+	local found = nil
 	pcall(function()
-		for _,obj in ipairs(LocalPlayer:GetDescendants()) do
-			if (obj.Name:lower():find("story") or obj.Name:lower():find("progress") or obj.Name:lower():find("chapter"))
-			and (obj:IsA("IntValue") or obj:IsA("NumberValue")) then
-				found=math.clamp(math.floor(obj.Value)+1,1,49); return
+		for _, obj in ipairs(LocalPlayer:GetDescendants()) do
+			if obj:IsA("StringValue") or obj:IsA("IntValue") then
+				local n = tostring(obj.Name)
+				local v = tostring(obj.Value)
+				-- direct name match
+				local num = n:match("^P9_(%d+)") or v:match("^P9_(%d+)")
+				if num then
+					local step = tonumber(num)
+					if not found or step > found then found = step end
+				end
 			end
 		end
 	end)
-	return found
+	if found then return math.clamp(found, 1, 49) end
+
+	return nil -- couldn't detect; caller falls back to startAt
 end
 
 function Features.setStoryFarm(on)
 	storyRunning=on
 	if not on then return end
 	task.spawn(function()
-		-- Auto-resume: detect current step from game state
-		local detected=detectCurrentStoryStep()
+		-- Auto-resume: detect ACTIVE quest from real player data first
+		local detected = detectCurrentStoryStep()
 		local step = detected or (Config.Values.Story.startAt or 1)
-		if detected and detected ~= (Config.Values.Story.startAt or 1) then
-			Config.Values.Story.startAt=detected
-			Util.notify("Story Farm","Resuming from P9_"..("%02d"):format(step),4)
+		-- Clamp to valid range
+		step = math.clamp(math.floor(step), 1, Game.STORY_TOTAL)
+		if detected then
+			Config.Values.Story.startAt = step
+			Util.notify("Story Farm", "Resuming from P9_"..("%02d"):format(step), 4)
 		end
+
 		while storyRunning and Config.Values.Story.enabled do
-			if step>Game.STORY_TOTAL then
+			if step > Game.STORY_TOTAL then
 				Util.notify("Story Farm","All 49 parts complete!",5)
-				Config.Values.Story.enabled=false
+				Config.Values.Story.enabled = false
 				break
 			end
-			local id=Game.STORY_CHAIN[step]
-			pcall(runStoryStep,id)
-			step=step+1
-			Config.Values.Story.startAt=step
+			local id = Game.STORY_CHAIN[step]
+			-- Re-detect mid-loop in case server already advanced the quest
+			-- (e.g. if user manually completed a step between iterations)
+			local live = detectCurrentStoryStep()
+			if live and live > step then
+				step = live
+				Config.Values.Story.startAt = step
+				id = Game.STORY_CHAIN[step]
+			end
+			pcall(runStoryStep, id)
+			step = step + 1
+			Config.Values.Story.startAt = step
 			task.wait(0.5)
 		end
 	end)
