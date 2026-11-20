@@ -2422,10 +2422,12 @@ function Features.doServerHop()
 end
 
 -- ── REGISTER CONFIG DEFAULTS ─────────────────────────────────
-Config.Values.AutoTutorial  = Config.Values.AutoTutorial  or {enabled=false}
-Config.Values.AutoArrow     = Config.Values.AutoArrow     or {enabled=false,range=500,interactDist=10}
-Config.Values.AutoElim      = Config.Values.AutoElim      or {enabled=false,hopOnPlayer=true}
-Config.Values.GardenSell    = Config.Values.GardenSell    or {enabled=false}
+Config.Values.AutoTutorial   = Config.Values.AutoTutorial   or {enabled=false}
+Config.Values.AutoArrow      = Config.Values.AutoArrow      or {enabled=false,range=500,interactDist=10}
+Config.Values.AutoElim       = Config.Values.AutoElim       or {enabled=false,hopOnPlayer=true}
+Config.Values.GardenSell     = Config.Values.GardenSell     or {enabled=false}
+Config.Values.SideQuestSmart = Config.Values.SideQuestSmart or {enabled=false}
+Config.Values.BountyAgent    = Config.Values.BountyAgent    or {enabled=false,skipGoFish=true,skipIncident=true}
 Config.Values.MasterAgent   = Config.Values.MasterAgent   or {
 	enabled=false, autoSummon=true, autoTutorial=false,
 	useSkills=true, story=false, bounty=true,
@@ -2905,10 +2907,26 @@ UILib.button(bt1,{
 	onPress=refreshBountyBoard,
 })
 
-UILib.label(bt1,"▸ Bounty Farm")
+UILib.label(bt1,"▸ Bounty Board Agent")
+UILib.toggle(bt1,{"BountyAgent","enabled"},{
+	title="Bounty Board Agent",
+	desc="Full agent: walk to Petyr, pick non-GoFish/Incident slot, do steps, claim reward.",
+	onChange=function(on)
+		Util.stopLoop("BountyAgent")
+		if not on then return end
+		Util.startLoop("BountyAgent",0.5,function()
+			if not (Config.Values.BountyAgent and Config.Values.BountyAgent.enabled) then return end
+			pcall(Features.doBountyStep)
+		end)
+	end,
+})
+UILib.toggle(bt1,{"BountyAgent","skipGoFish"},{title="Skip GoFish Steps",default=true})
+UILib.toggle(bt1,{"BountyAgent","skipIncident"},{title="Skip Incident Steps",default=true})
+
+UILib.label(bt1,"▸ Legacy Bounty Farm")
 UILib.toggle(bt1,{"BountyFarm","enabled"},{
-	title="Bounty Farm",
-	desc="Auto-complete bounty cycle.",
+	title="Bounty Farm (Legacy)",
+	desc="Old bounty cycle helper.",
 })
 UILib.slider(bt1,{"BountyFarm","acceptTier"},{title="Accept At Tier",min=0,max=10,default=0})
 UILib.toggle(bt1,{"BountyFarm","find"},{title="Find Target"})
@@ -2918,6 +2936,24 @@ UILib.toggle(bt1,{"BountyFarm","summonFights"},{title="Summon Fights"})
 UILib.toggle(bt1,{"BountyFarm","jewelry"},{title="Cheap Jewelry Minigame"})
 UILib.toggle(bt1,{"BountyFarm","report"},{title="Report Step"})
 UILib.toggle(bt1,{"BountyFarm","claimAtPetyr"},{title="Claim At Petyr"})
+
+UILib.label(bt2,"▸ Elimination Bounties")
+UILib.toggle(bt2,{"AutoElim","enabled"},{
+	title="Elimination Bounty",
+	desc="Auto Sync/Start PlayerBounties, attack NPC target, hop if player target.",
+	onChange=function(on)
+		Util.stopLoop("ElimAgent")
+		if not on then return end
+		Util.startLoop("ElimAgent",1,function()
+			if not (Config.Values.AutoElim and Config.Values.AutoElim.enabled) then return end
+			pcall(Features.doEliminationStep)
+		end)
+	end,
+})
+UILib.toggle(bt2,{"AutoElim","hopOnPlayer"},{
+	title="Hop On Player Target",
+	desc="Server-hop when assigned target is a real player.",
+})
 
 UILib.label(bt2,"▸ Bounty Settings")
 UILib.slider(bt2,{"BountySettings","offsetX"},{title="X Offset",min=-20,max=20,default=0})
