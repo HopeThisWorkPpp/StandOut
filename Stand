@@ -1246,7 +1246,8 @@ local STORY_STEPS = {
 	-- P9_10 → fight bandits
 	["P9_10"] = {npc="Bandit",          action="fight",  questId="P9_10"},
 	-- P9_11..P9_15 → talk chain (various NPCs)
-	["P9_11"] = {npc="Sheriff",         action="talk",   questId="P9_11"},
+	-- P9_11 → deliver Yokohama documents to Meryl at Iko Iko
+	["P9_11"] = {npc="Meryl",           action="deliver", questId="P9_11", item="Yokohama"},
 	["P9_12"] = {npc="Petyr",           action="talk",   questId="P9_12"},
 	["P9_13"] = {npc="Bobby",           action="talk",   questId="P9_13"},
 	["P9_14"] = {npc="Howler",          action="talk",   questId="P9_14"},
@@ -1335,8 +1336,33 @@ local function runStoryStep(stepId)
 		task.wait(0.5)
 	end
 
+	-- Read live quest objective to override NPC target if possible
+	-- e.g. "Report to Meryl at Iko Iko" → use "Meryl" not table's "Sheriff"
+	local npcName = step.npc
+	pcall(function()
+		local data = LocalPlayer:FindFirstChild("Data")
+		local objs = data and (data:FindFirstChild("QuestObjectives") or data:FindFirstChild("Quests"))
+		local node = objs and objs:FindFirstChild(stepId)
+		local objText = node and (tostring(node.Value or ""))
+		if not objText or objText=="" then
+			-- also try attribute
+			objText = LocalPlayer:GetAttribute("QuestObjective_"..stepId) or ""
+		end
+		if objText ~= "" then
+			-- "Report to X at Y" / "Show X to Y" / "Talk to X"
+			local candidate = objText:match("[Tt]alk%s+to%s+(%a+)")
+				or objText:match("[Rr]eport%s+to%s+(%a+)")
+				or objText:match("[Ss]how%s+%a+%s+to%s+(%a+)")
+				or objText:match("[Dd]eliver%s+%a+%s+to%s+(%a+)")
+				or objText:match("[Ff]ind%s+(%a+)")
+			if candidate and #candidate > 2 then
+				npcName = candidate
+			end
+		end
+	end)
+
 	-- Find and approach NPC
-	local npcModel = findNpcInWorkspace(step.npc)
+	local npcModel = findNpcInWorkspace(npcName) or findNpcInWorkspace(step.npc)
 	if npcModel then
 		Motion.approach(npcModel, {questBlock=true})
 		task.wait(0.3)
@@ -1400,6 +1426,48 @@ local function runStoryStep(stepId)
 		if r then
 			local qr=r:FindFirstChild("Quest")
 			if qr then pcall(function() qr:FireServer("Bobby Carry") end) end
+		end
+		task.wait(1)
+
+	elseif step.action=="deliver" then
+		-- Deliver item / document to NPC — read live quest objective to confirm target
+		-- Objective text: "Show X's documents 0/1" or "Deliver X to Y"
+		-- Walk to NPC, press prompt, auto-answer deliver dialogue line
+		if npcModel then
+			Motion.approach(npcModel, {questBlock=true})
+			task.wait(0.4)
+			-- Try proximity prompt first (most deliver steps use one)
+			local root = Util.root(npcModel)
+			if root then
+				local hrp = Util.hrp()
+				if hrp and (root.Position-hrp.Position).Magnitude < 15 then
+					-- press all nearby prompts
+					for _, pp in ipairs(npcModel:GetDescendants()) do
+						if pp:IsA("ProximityPrompt") and pp.Enabled then
+							pcall(function() fireproximityprompt(pp) end)
+							task.wait(0.3)
+						end
+					end
+				end
+			end
+			-- Also try Quest remote deliver
+			Net.interact(npcModel)
+			task.wait(0.5)
+			-- Fire Quest/Deliver remote if available
+			local rs = game:GetService("ReplicatedStorage")
+			local remotes = rs:FindFirstChild("Remotes")
+			if remotes then
+				local qr = remotes:FindFirstChild("Quest") or remotes:FindFirstChild("QuestRemote")
+				if qr then
+					pcall(function() qr:FireServer("Deliver", step.questId or stepId, step.item or "") end)
+					pcall(function() qr:FireServer("Complete", step.questId or stepId) end)
+				end
+				-- Also try generic Deliver remote
+				local dr = remotes:FindFirstChild("Deliver") or remotes:FindFirstChild("DeliverItem")
+				if dr then
+					pcall(function() dr:FireServer(step.item or "", step.questId or stepId) end)
+				end
+			end
 		end
 		task.wait(1)
 
