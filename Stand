@@ -1299,13 +1299,30 @@ local STORY_STEPS = {
 }
 
 local function findNpcInWorkspace(npcName)
-	for _,m in ipairs(Workspace:GetDescendants()) do
-		if m:IsA("Model") and m.Name:find(npcName,1,true) then
-			local root=Util.root(m)
-			if root then return m end
+	if not npcName or npcName=="" then return nil end
+	local lname=npcName:lower()
+	-- Search order: Game.NPCs first (real NPC folder), then full workspace
+	-- Prefer EXACT name match over partial to avoid going to wrong model
+	local gameFolder=Workspace:FindFirstChild("Game")
+	local searchSets={
+		gameFolder and gameFolder:FindFirstChild("NPCs") and gameFolder:FindFirstChild("NPCs"):GetChildren() or {},
+		Workspace:GetDescendants(),
+	}
+	local partial=nil
+	for _,set in ipairs(searchSets) do
+		for _,m in ipairs(set) do
+			if m:IsA("Model") and m~=LocalPlayer.Character then
+				local mn=m.Name:lower()
+				local root=Util.root(m)
+				if root then
+					if mn==lname then return m end -- exact match wins immediately
+					if not partial and mn:find(lname,1,true) then partial=m end
+				end
+			end
 		end
+		if partial then return partial end -- return best from this set before going wider
 	end
-	return nil
+	return partial
 end
 
 local function runStoryStep(stepId)
@@ -1352,9 +1369,13 @@ local function runStoryStep(stepId)
 			-- "Report to X at Y" / "Show X to Y" / "Talk to X"
 			local candidate = objText:match("[Tt]alk%s+to%s+(%a+)")
 				or objText:match("[Rr]eport%s+to%s+(%a+)")
-				or objText:match("[Ss]how%s+%a+%s+to%s+(%a+)")
-				or objText:match("[Dd]eliver%s+%a+%s+to%s+(%a+)")
+				or objText:match("[Ss]how%s+(%a+)%s+[Yy]okohama") -- "Show Meryl Yokohama"
+				or objText:match("[Ss]how%s+%a[%a']+%s+to%s+(%a+)")
+				or objText:match("[Dd]eliver%s+%a[%a']+%s+to%s+(%a+)")
+				or objText:match("[Gg]ive%s+%a[%a']+%s+to%s+(%a+)")
 				or objText:match("[Ff]ind%s+(%a+)")
+				or objText:match("[Ff]ollow%s+(%a+)")
+				or objText:match("[Mm]eet%s+(%a+)")
 			if candidate and #candidate > 2 then
 				npcName = candidate
 			end
