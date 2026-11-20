@@ -1513,16 +1513,18 @@ local function detectCurrentStoryStep()
 			or data:FindFirstChild("Quests")
 			or data:FindFirstChild("ActiveQuests")
 		if objs then
-			local highest = nil
+			-- Take the LOWEST active P9_ step — that's the earliest incomplete quest.
+			-- The game can have multiple P9_XX active at once; we want the first one.
+			local lowest = nil
 			for _, child in ipairs(objs:GetChildren()) do
 				local n = tostring(child.Name)
 				local num = n:match("^P9_(%d+)")
 				if num then
 					local v = tonumber(num)
-					if not highest or v > highest then highest = v end
+					if not lowest or v < lowest then lowest = v end
 				end
 			end
-			if highest then return math.clamp(highest, 1, 49) end
+			if lowest then return math.clamp(lowest, 1, 49) end
 		end
 
 		-- Also check flat attributes on Data for P9 progress
@@ -1558,7 +1560,7 @@ local function detectCurrentStoryStep()
 				local num = n:match("^P9_(%d+)") or v:match("^P9_(%d+)")
 				if num then
 					local step = tonumber(num)
-					if not found or step > found then found = step end
+					if not found or step < found then found = step end
 				end
 			end
 		end
@@ -1589,10 +1591,11 @@ function Features.setStoryFarm(on)
 				break
 			end
 			local id = Game.STORY_CHAIN[step]
-			-- Re-detect mid-loop in case server already advanced the quest
-			-- (e.g. if user manually completed a step between iterations)
+			-- Mid-loop: only jump FORWARD if the game truly skipped past this step.
+			-- We use lowest-active-P9 so we never skip back to a higher parallel quest.
 			local live = detectCurrentStoryStep()
-			if live and live > step then
+			if live and live > step + 1 then
+				-- Game jumped more than one step ahead (e.g. cutscene skipped a step)
 				step = live
 				Config.Values.Story.startAt = step
 				id = Game.STORY_CHAIN[step]
