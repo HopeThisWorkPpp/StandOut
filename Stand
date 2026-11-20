@@ -158,7 +158,7 @@ Config.Values = {
 		summonFights=true, jewelry=true, report=true, claimAtPetyr=true,
 	},
 	BountySettings = { offsetX=0, offsetY=3, offsetZ=0, targetFilter="" },
-	MobFarm    = { enabled=false, enemy="Any Enemy", radius=250 },
+	MobFarm    = { enabled=false, enemy="Any Enemy", radius=250, autoHop=false },
 	Recovery   = { enabled=true, backOffAt=25, resumeAt=60 },
 	BossFarm   = { enabled=false, boss="Any Boss", serverHopWhenNone=false },
 	ItemFarm   = { enabled=false, item="Any Item", meteorLoot=true, arrowSpots=false, serverHopWhenEmpty=false },
@@ -1464,21 +1464,50 @@ end
 
 -- ---- 9.19 MOB FARM ----
 local mobFarmRunning=false
+-- starhub mob_step: skip CommandBoss==true, skip NPCs within 25 studs of another player
+local _mobNoHitSince=0
 local function nearestMob(range)
 	local hrp=Util.hrp(); if not hrp then return nil end
 	local best,bestDist=nil,math.huge
-	for _,model in ipairs(Workspace:GetDescendants()) do
-		if model:IsA("Model") and model~=LocalPlayer.Character then
+	local pick=Config.Values.MobFarm.enemy
+	-- Get player positions for proximity check
+	local playerPositions={}
+	for _,plr in ipairs(Players:GetPlayers()) do
+		if plr~=LocalPlayer and plr.Character then
+			local r=Util.root(plr.Character)
+			if r then table.insert(playerPositions,r.Position) end
+		end
+	end
+	local function nearOtherPlayer(pos)
+		for _,pp in ipairs(playerPositions) do
+			if (pos-pp).Magnitude<=25 then return true end
+		end
+		return false
+	end
+	local gameFolder=Workspace:FindFirstChild("Game")
+	local npcFolder=gameFolder and gameFolder:FindFirstChild("NPCs")
+	for _,model in ipairs(npcFolder and npcFolder:GetChildren() or {}) do
+		if model:IsA("Model")
+			and model:GetAttribute("FightableNPC")==true
+			and not model:GetAttribute("PassedOut")
+			and not model:GetAttribute("NoM1")
+			and not model:GetAttribute("CommandBoss") then -- skip CommandBoss
 			local hum=model:FindFirstChildOfClass("Humanoid")
 			local root=Util.root(model)
 			if hum and hum.Health>0 and root then
 				local d=(root.Position-hrp.Position).Magnitude
-				local pick=Config.Values.MobFarm.enemy
 				if d<=range and (pick=="Any Enemy" or model.Name==pick) then
-					if d<bestDist then bestDist=d; best=model end
+					if not nearOtherPlayer(root.Position) then -- skip NPCs near other players
+						if d<bestDist then bestDist=d; best=model end
+					end
 				end
 			end
 		end
+	end
+	if not best then
+		_mobNoHitSince=_mobNoHitSince==0 and os.clock() or _mobNoHitSince
+	else
+		_mobNoHitSince=0
 	end
 	return best
 end
@@ -1505,7 +1534,17 @@ function Features.setMobFarm(on)
 			end
 		end
 		local target=nearestMob(Config.Values.MobFarm.radius)
-		if not target then return end
+		if not target then
+			-- auto-hop after 20s with no hittable NPC (starhub [212] pattern)
+			if Config.Values.MobFarm.autoHop and _mobNoHitSince>0 then
+				if os.clock()-_mobNoHitSince >= 20 then
+					_mobNoHitSince=0
+					pcall(Features.doServerHop)
+				end
+			end
+			return
+		end
+		_mobNoHitSince=0
 		Motion.approach(target)
 		Net.attack(target)
 		if Config.Values.FarmShared.useSkills then
@@ -1610,6 +1649,790 @@ function Features.setSideQuestAgent(on)
 	end)
 end
 
+-- ============================================================
+-- 9.22b  FULL AUTONOMOUS AGENT (ported from starhub VM bytecode)
+-- ============================================================
+
+-- ── AGENT UTILITIES ──────────────────────────────────────────
+local Agent = {}
+
+-- Get player's replicated folder
+function Agent.replicated()
+	return game:GetService("ReplicatedStorage"):FindFirstChild("Modules")
+		or game:GetService("ReplicatedStorage")
+end
+
+-- Check if currently in dialogue
+function Agent.inDialogue()
+	local pg=LocalPlayer:FindFirstChildOfClass("PlayerGui")
+	if not pg then return false end
+	local dlg=pg:FindFirstChild("Dialogue")
+	if dlg then
+		local holder=dlg:FindFirstChild("Holder")
+		if holder and holder.Visible then return true end
+	end
+	return LocalPlayer:GetAttribute("DialogueInputLocked")==true
+end
+
+-- Check if tutorial is done (TutorialProgress >= 9 or attribute)
+function Agent.tutorialDone()
+	local data=LocalPlayer:FindFirstChild("Data")
+	if not data then return true end -- assume done if no data
+	local prog=data:GetAttribute("TutorialProgress") or data:GetAttribute("TutorialStep") or 0
+	return prog >= 9
+end
+
+function Agent.tutorialProgress()
+	local data=LocalPlayer:FindFirstChild("Data")
+	if not data then return 9 end
+	return data:GetAttribute("TutorialProgress") or data:GetAttribute("TutorialStep") or 0
+end
+
+-- Check if stand is summoned
+function Agent.standSummoned()
+	local char=LocalPlayer.Character; if not char then return false end
+	local standFolder=char:FindFirstChild("Stand") or char:FindFirstChild("StandModel")
+	return standFolder ~= nil
+end
+
+-- Get available quest points
+function Agent.availableQuests()
+	local points=LocalPlayer:FindFirstChild("AvailableQuestPoints")
+	if not points then return {} end
+	local list={}
+	for _,node in ipairs(points:GetChildren()) do
+		local id=node.Name:gsub("^AvailableQuest_","")
+		-- get position from QuestLocations if available
+		local rs=game:GetService("ReplicatedStorage")
+		local locs=rs:FindFirstChild("QuestLocations")
+		local posNode=locs and locs:FindFirstChild(id,true)
+		local pos=posNode and posNode.Value or nil
+		table.insert(list,{id=id, name=node.Name, position=pos})
+	end
+	return list
+end
+
+-- Get active quests from player attributes
+function Agent.activeQuests()
+	local list={}
+	local tracked=LocalPlayer:GetAttribute("TrackedQuest")
+	if tracked and tracked~="" then
+		table.insert(list,{id=tracked})
+	end
+	-- also check QuestObjectives
+	local data=LocalPlayer:FindFirstChild("Data")
+	if data then
+		local objs=data:FindFirstChild("QuestObjectives")
+		if objs then
+			for _,v in ipairs(objs:GetChildren()) do
+				local id=v.Name
+				if not id:find("^P9_") and not id:find("^TUTORIAL_") then
+					table.insert(list,{id=id})
+				end
+			end
+		end
+	end
+	return list
+end
+
+-- Get quest objective text
+function Agent.questObjective(questId, keyword)
+	local data=LocalPlayer:FindFirstChild("Data")
+	if not data then return false end
+	local objs=data:FindFirstChild("QuestObjectives")
+	if not objs then return false end
+	local node=objs:FindFirstChild(questId)
+	if not node then return false end
+	local text=(node.Value or ""):lower()
+	return keyword and text:find(keyword:lower(),1,true)~=nil or text
+end
+
+-- Find nearest fightable NPC in Workspace.Game.NPCs with optional name filter
+function Agent.nearestEnemy(wantedName, maxRange)
+	local hrp=Util.hrp(); if not hrp then return nil end
+	maxRange=maxRange or math.huge
+	local gameFolder=Workspace:FindFirstChild("Game")
+	local npcFolder=gameFolder and gameFolder:FindFirstChild("NPCs")
+	local best,bestDist=nil,math.huge
+	for _,model in ipairs(npcFolder and npcFolder:GetChildren() or {}) do
+		if model:IsA("Model") and model:GetAttribute("FightableNPC")==true
+			and not model:GetAttribute("PassedOut") and not model:GetAttribute("NoM1") then
+			if not wantedName or model.Name:lower():find(wantedName:lower(),1,true) then
+				local root=Util.root(model)
+				local hum=model:FindFirstChildOfClass("Humanoid")
+				if root and hum and hum.Health>0 then
+					local d=(root.Position-hrp.Position).Magnitude
+					if d<bestDist and d<=maxRange then bestDist=d; best=model end
+				end
+			end
+		end
+	end
+	-- also check player characters if wanted
+	if not best then
+		local plrFolder=gameFolder and gameFolder:FindFirstChild("Players")
+		for _,model in ipairs(plrFolder and plrFolder:GetChildren() or {}) do
+			local plr=Players:GetPlayerFromCharacter(model)
+			if plr and plr~=LocalPlayer then
+				local root=Util.root(model)
+				local hum=model:FindFirstChildOfClass("Humanoid")
+				if root and hum and hum.Health>0 then
+					local d=(root.Position-hrp.Position).Magnitude
+					if d<bestDist and d<=maxRange then bestDist=d; best=model end
+				end
+			end
+		end
+	end
+	return best,bestDist
+end
+
+-- Find proximity prompt near a position
+function Agent.nearestPrompt(position, maxRange, filterFn)
+	maxRange=maxRange or 20
+	local best,bestDist=nil,math.huge
+	for _,pp in ipairs(Workspace:GetDescendants()) do
+		if pp:IsA("ProximityPrompt") and pp.Enabled then
+			local part=pp.Parent
+			local pos=part and part:IsA("BasePart") and part.Position
+				or part and part:FindFirstChildWhichIsA("BasePart") and part:FindFirstChildWhichIsA("BasePart").Position
+			if pos then
+				local d=(pos-position).Magnitude
+				if d<bestDist and d<=maxRange then
+					if not filterFn or filterFn(pp,pos) then
+						bestDist=d; best={prompt=pp,position=pos,distance=d}
+					end
+				end
+			end
+		end
+	end
+	return best
+end
+
+-- Find NPC model by name in fighters/friends folders
+function Agent.findNPC(name)
+	local gameFolder=Workspace:FindFirstChild("Game")
+	local folders={
+		gameFolder and gameFolder:FindFirstChild("NPCs"),
+		gameFolder and gameFolder:FindFirstChild("Players"),
+		Workspace,
+	}
+	local lname=name:lower()
+	for _,folder in ipairs(folders) do
+		if folder then
+			for _,model in ipairs(folder:IsA("Folder") and folder:GetChildren() or folder:GetDescendants()) do
+				if model:IsA("Model") and model.Name:lower():find(lname,1,true) then
+					local root=Util.root(model)
+					if root then return model,root end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+-- Get arrow pickups from workspace
+function Agent.findArrows()
+	local list={}
+	local hrp=Util.hrp()
+	for _,v in ipairs(Workspace:GetDescendants()) do
+		if v:IsA("Model") or v:IsA("BasePart") then
+			local n=v.Name:lower()
+			if n:find("arrow") and not n:find("tutorial") then
+				local pos=(v:IsA("BasePart") and v.Position)
+					or (v:IsA("Model") and v:GetAttribute("WorldPosition"))
+					or (v:IsA("Model") and Util.root(v) and Util.root(v).Position)
+				if pos and hrp then
+					table.insert(list,{object=v,position=pos,distance=(pos-hrp.Position).Magnitude})
+				end
+			end
+		end
+	end
+	table.sort(list,function(a,b) return a.distance<b.distance end)
+	return list
+end
+
+-- Press a proximity prompt
+local function firePrompt(pp)
+	pcall(function() fireproximityprompt(pp) end)
+	pcall(function() pp:InputHoldBegin() end)
+end
+
+-- ── TUTORIAL AUTO-COMPLETE ────────────────────────────────────
+-- Steps 1-8+ based on starhub's tutorial_step (VM [201])
+function Features.runTutorialStep()
+	local step=Agent.tutorialProgress()
+	local data=LocalPlayer:FindFirstChild("Data")
+	-- Step 1-3: press tutorial signal remotes
+	if step<=3 then
+		local r=R("Tutorial") or R("TutorialSignal")
+		if r then pcall(function() r:FireServer("STEP_"..math.max(1,step)) end) end
+		if step==2 then
+			-- press Run (LeftShift) + Dash (Q)
+			local VU=game:GetService("VirtualInputManager") or game:GetService("VirtualUser")
+			pcall(function()
+				if VU and VU.SendKeyEvent then
+					VU:SendKeyEvent(true,Enum.KeyCode.LeftShift,false,game)
+					task.wait(0.2)
+					VU:SendKeyEvent(false,Enum.KeyCode.LeftShift,false,game)
+					task.wait(0.05)
+					VU:SendKeyEvent(true,Enum.KeyCode.Q,false,game)
+					task.wait(0.1)
+					VU:SendKeyEvent(false,Enum.KeyCode.Q,false,game)
+				end
+			end)
+		end
+		return true
+	end
+	-- Step 4: beach phase — go to TutorialJodio or find arrow sand
+	if step==4 then
+		local phase=data and data:GetAttribute("TutorialBeachStep")
+		if phase=="Jodio" then
+			local npc,root=Agent.findNPC("TutorialJodio")
+			if npc and root then Motion.travelTo(root.Position,{tolerance=5}) end
+			return true
+		end
+		if phase=="Sand" then
+			local rs=game:GetService("ReplicatedStorage")
+			local node=rs:FindFirstChild("TutorialArrowDestination")
+			if node then Motion.travelTo(node.Value,{tolerance=3}) end
+			return true
+		end
+		-- beat tutorial cop
+		local cop,root=Agent.nearestEnemy("TutorialCop")
+		if cop then Net.attack(cop) return true end
+		local destNode=game:GetService("ReplicatedStorage"):FindFirstChild("TutorialCopDestination")
+			or game:GetService("ReplicatedStorage"):FindFirstChild("TutorialAgentDestination")
+		if destNode then Motion.travelTo(destNode.Value,{tolerance=3}) return true end
+		return false
+	end
+	-- Step 5: use tutorial arrow
+	if step==5 then
+		local arrows=Agent.findArrows()
+		if arrows[1] then
+			Motion.travelTo(arrows[1].position,{tolerance=4})
+			firePrompt(arrows[1].object:IsA("ProximityPrompt") and arrows[1].object
+				or arrows[1].object:FindFirstChildWhichIsA("ProximityPrompt",true))
+		end
+		return true
+	end
+	-- Step 6: summon stand + press Pilot (LeftControl)
+	if step==6 then
+		if not Agent.standSummoned() then Features.summonStand() end
+		local VU=game:GetService("VirtualInputManager")
+		pcall(function()
+			if VU and VU.SendKeyEvent then
+				VU:SendKeyEvent(true,Enum.KeyCode.LeftControl,false,game)
+				task.wait(0.08)
+				VU:SendKeyEvent(false,Enum.KeyCode.LeftControl,false,game)
+			end
+		end)
+		return true
+	end
+	-- Step 7: use skills in EX mode
+	if step==7 then
+		Features.useNextSkill()
+		return true
+	end
+	-- Step 8: allocate stats
+	if step==8 then
+		Features.doAutoStats()
+		return true
+	end
+	-- Step 9+: go to Meryl Mei Qi
+	local meryl,root=Agent.findNPC("Meryl")
+	if meryl and root then
+		if (root.Position-Util.hrp().Position).Magnitude>10 then
+			Motion.travelTo(root.Position,{tolerance=5})
+		else
+			local pp=Agent.nearestPrompt(root.Position,12)
+			if pp then firePrompt(pp.prompt) end
+		end
+	end
+	return true
+end
+
+-- ── TUTORIAL AUTO TOGGLE ─────────────────────────────────────
+function Features.setAutoTutorial(on)
+	Util.stopLoop("AutoTutorial")
+	if not on then return end
+	Util.startLoop("AutoTutorial",2,function()
+		if not Config.Values.AutoTutorial or not Config.Values.AutoTutorial.enabled then return end
+		if Agent.tutorialDone() then
+			Util.stopLoop("AutoTutorial")
+			Util.notify("Tutorial","Complete!",3)
+			return
+		end
+		pcall(Features.runTutorialStep)
+	end)
+end
+
+-- ── ARROW AUTO-COLLECT ────────────────────────────────────────
+function Features.setAutoArrow(on)
+	Util.stopLoop("AutoArrow")
+	if not on then return end
+	Util.startLoop("AutoArrow",0.5,function()
+		if not Config.Values.AutoArrow or not Config.Values.AutoArrow.enabled then return end
+		local arrows=Agent.findArrows()
+		if #arrows==0 then return end
+		local best=arrows[1]
+		local hrp=Util.hrp(); if not hrp then return end
+		if best.distance > (Config.Values.AutoArrow.interactDist or 10) then
+			Motion.travelTo(best.position,{tolerance=4})
+		else
+			-- fire proximity prompt
+			local pp
+			if best.object:IsA("ProximityPrompt") then
+				pp=best.object
+			else
+				pp=best.object:FindFirstChildWhichIsA("ProximityPrompt",true)
+			end
+			if pp then firePrompt(pp) end
+		end
+	end)
+end
+
+-- ── HUBER TAXI STEP ──────────────────────────────────────────
+-- Starhub huber_step: open phone app > Huber, board, choose destination
+-- We handle via proximity prompts on the Huber stop + phone GUI
+function Features.doHuberStep()
+	local pg=LocalPlayer:FindFirstChildOfClass("PlayerGui")
+	if not pg then return false end
+	-- Look for Huber stop proximity prompt
+	local hrp=Util.hrp(); if not hrp then return false end
+	local stop=Agent.nearestPrompt(hrp.Position,50,function(pp)
+		return pp.ActionText and pp.ActionText:lower():find("huber")~=nil
+	end)
+	if stop then
+		if stop.distance>8 then
+			Motion.travelTo(stop.position,{tolerance=4})
+			return true
+		end
+		firePrompt(stop.prompt)
+		return true
+	end
+	return false
+end
+
+-- ── ELIMINATION BOUNTY STEP ──────────────────────────────────
+-- Real starhub elimination_step (VM [205]):
+-- sync → start → attack assigned target → hop if player target
+local _elimLastSync=0
+function Features.doEliminationStep()
+	local now=os.clock()
+	-- sync first to get current state
+	if now-_elimLastSync > 5 then
+		_elimLastSync=now
+		Net.syncPlayerBounties()
+		task.wait(0.3)
+	end
+	-- check elimination remote data
+	local data=LocalPlayer:FindFirstChild("Data")
+	local elim=data and data:FindFirstChild("PlayerBounty")
+	local elimState=elim and elim:GetAttribute("State")
+	if elimState=="Searching" or elimState=="Completing" then
+		return true -- waiting
+	end
+	if elimState=="Active" then
+		local kind=elim:GetAttribute("Kind") or ""
+		local targetId=elim:GetAttribute("TargetUserId")
+		-- if player target and auto hop enabled, hop
+		if kind~="NPC" and Config.Values.AutoElim and Config.Values.AutoElim.hopOnPlayer then
+			Features.doServerHop()
+			return true
+		end
+		-- attack NPC target
+		if targetId then
+			local targetChar
+			if kind=="NPC" then
+				local charName=elim:GetAttribute("CharacterName") or ""
+				targetChar=Agent.findNPC(charName)
+			else
+				local plr=Players:GetPlayerByUserId(tonumber(targetId))
+				targetChar=plr and plr.Character
+			end
+			if targetChar then
+				Motion.approach(targetChar)
+				Net.attack(targetChar)
+				return true
+			end
+		end
+		return false
+	end
+	-- not active — start one
+	Net.startPlayerBounty(nil)
+	return true
+end
+
+-- ── FULL BOUNTY BOARD AGENT ───────────────────────────────────
+-- Real starhub bounty_step (VM [206]):
+-- go to Petyr, open board, pick non-GoFish/Incident slot, do steps
+local _bountyAcceptAt=0
+function Features.doBountyStep()
+	local now=os.clock()
+	local hrp=Util.hrp(); if not hrp then return false end
+
+	-- check if we have a pending claim (ReadyToClaim)
+	local data=LocalPlayer:FindFirstChild("Data")
+	local bountyData=data and data:FindFirstChild("ActiveBounty")
+	local readyToClaim=bountyData and bountyData:GetAttribute("ReadyToClaim")
+	if readyToClaim then
+		-- go to Petyr to claim
+		local petyr,root=Agent.findNPC("Petyr")
+		if petyr and root then
+			if (root.Position-hrp.Position).Magnitude>10 then
+				Motion.travelTo(root.Position,{tolerance=5})
+				return true
+			end
+			-- press claim prompt, want "claim" dialogue line
+			local pp=Agent.nearestPrompt(root.Position,12)
+			if pp then firePrompt(pp.prompt) end
+			return true
+		end
+		return false
+	end
+
+	-- no active bounty — need to accept one from Petyr's board
+	local activeBounty=bountyData and bountyData:GetAttribute("BountyId")
+	if not activeBounty then
+		-- walk to Petyr
+		local petyr,root=Agent.findNPC("Petyr")
+		if not petyr or not root then return false end
+		if (root.Position-hrp.Position).Magnitude>10 then
+			Motion.travelTo(root.Position,{tolerance=5})
+			return true
+		end
+		-- check if board UI is open
+		local pg=LocalPlayer:FindFirstChildOfClass("PlayerGui")
+		local bountyGui=pg and pg:FindFirstChild("Bounty")
+		local boardOpen=bountyGui and bountyGui:FindFirstChild("BountySelect",true)
+			and bountyGui:FindFirstChild("BountySelect",true).Visible
+		if not boardOpen then
+			-- open board via proximity prompt
+			local pp=Agent.nearestPrompt(root.Position,12)
+			if pp then firePrompt(pp.prompt) end
+			return true
+		end
+		-- board is open — pick a bounty
+		if now < _bountyAcceptAt then return false end
+		_bountyAcceptAt=now+4
+		-- read bounty list from PlayerGui board UI
+		local listFrame=bountyGui:FindFirstChild("BountyList",true)
+		local picked=nil
+		if listFrame then
+			for _,child in ipairs(listFrame:GetChildren()) do
+				local btype=child:GetAttribute("BountyType") or child.Name
+				-- skip GoFish and Incident types
+				if not btype:lower():find("gofish") and not btype:lower():find("incident") then
+					local bId=child:GetAttribute("BountyId") or child:GetAttribute("Id")
+					if bId then picked=bId; break end
+				end
+			end
+		end
+		if picked then
+			Net.acceptBounty(picked)
+		else
+			-- fallback: fire first Accept we can
+			Net.acceptBounty(1)
+		end
+		return true
+	end
+
+	-- we have an active bounty — work the steps
+	local stepType=bountyData:GetAttribute("StepType") or ""
+	local stepTarget=bountyData:GetAttribute("StepTarget") or ""
+	local stepPos=bountyData:GetAttribute("StepPosition") -- Vector3Value
+
+	-- Summon/Defend: attack bounty enemy
+	if stepType=="Summon" or stepType=="Defend" then
+		local enemy=Agent.findNPC(stepTarget)
+		if enemy then
+			Motion.approach(enemy)
+			Net.attack(enemy)
+			return true
+		end
+	end
+
+	-- GoFish/Incident: skip, let expire
+	if stepType=="GoFish" or stepType=="Incident" then
+		return false
+	end
+
+	-- Interact/Find: go to target NPC
+	if stepType=="Interact" or stepType=="Find" then
+		local npc,root=Agent.findNPC(stepTarget)
+		if npc and root then
+			if (root.Position-hrp.Position).Magnitude>10 then
+				Motion.travelTo(root.Position,{tolerance=5})
+				return true
+			end
+			local pp=Agent.nearestPrompt(root.Position,12)
+			if pp then firePrompt(pp.prompt) return true end
+		end
+		return false
+	end
+
+	-- travel to step position
+	if stepPos then
+		local pos=stepPos:IsA("Vector3Value") and stepPos.Value or nil
+		if pos and pos.Y>0 then
+			if (pos-hrp.Position).Magnitude>10 then
+				Motion.travelTo(pos,{tolerance=4})
+				return true
+			end
+		end
+	end
+
+	-- fallback: attack nearest enemy
+	local enemy=Agent.nearestEnemy()
+	if enemy then Motion.approach(enemy); Net.attack(enemy); return true end
+	return false
+end
+
+-- ── SIDE QUEST SMART AGENT ───────────────────────────────────
+-- Real starhub side_step (VM [207]):
+-- scan active non-story quests → do quest_step, else pick nearest available quest
+local SIDE_QUEST_DIALOGUE = {"any work","any job","need a hand","have any work"}
+function Features.doSideQuestStep()
+	local hrp=Util.hrp(); if not hrp then return false end
+
+	-- check active non-story, non-garden quests
+	for _,quest in ipairs(Agent.activeQuests()) do
+		local id=quest.id
+		if not id:find("^P9_") and not id:find("^TUTORIAL_")
+			and not id:find("GARDEN_GUIDE") and not id:find("SELL_HARVEST") then
+			-- special: Lenny cop car — just go fight
+			if id=="LENNY_COP_CAR" then
+				local enemy=Agent.nearestEnemy()
+				if enemy then Motion.approach(enemy); Net.attack(enemy) end
+				return true
+			end
+			-- Caesar bubble emote
+			if Agent.questObjective(id,"caesar_blowbubble") then
+				Net.fire("Emote","BlowBubble")
+				return true
+			end
+			-- hospital: carry Usagi
+			if id:find("HOSPITAL") then
+				local usagi,root=Agent.findNPC("Usagi")
+				if usagi and root then
+					if (root.Position-hrp.Position).Magnitude>5 then
+						Motion.travelTo(root.Position,{tolerance=3})
+						return true
+					end
+					local pp=Agent.nearestPrompt(root.Position,8,function(p)
+						return p.ActionText and p.ActionText:lower():find("pick up")~=nil
+					end)
+					if pp then firePrompt(pp.prompt); return true end
+				end
+			end
+			-- D'Arby: go fight
+			if id:find("DARBY") then
+				local darby,root=Agent.findNPC("Darby")
+				if darby and root then
+					if (root.Position-hrp.Position).Magnitude>8 then
+						Motion.travelTo(root.Position,{tolerance=5})
+						return true
+					end
+					local pp=Agent.nearestPrompt(root.Position,12)
+					if pp then firePrompt(pp.prompt); return true end
+				end
+				return false
+			end
+			-- beat quest enemy if any
+			local enemy=Agent.nearestEnemy()
+			if enemy then Motion.approach(enemy); Net.attack(enemy); return true end
+			-- go to quest marker
+			local tracked=LocalPlayer:GetAttribute("VisibleQuestTrackerPosition")
+			if tracked and typeof(tracked)=="Vector3" then
+				if (tracked-hrp.Position).Magnitude>10 then
+					Motion.travelTo(tracked,{tolerance=5})
+					return true
+				end
+				-- press nearby prompt
+				local pp=Agent.nearestPrompt(hrp.Position,15)
+				if pp then firePrompt(pp.prompt); return true end
+			end
+			return false
+		end
+	end
+
+	-- pick nearest available side quest
+	local quests=Agent.availableQuests()
+	if #quests==0 then return false end
+	local best,bestDist=nil,math.huge
+	for _,q in ipairs(quests) do
+		if q.position then
+			local d=(q.position-hrp.Position).Magnitude
+			if d<bestDist then bestDist=d; best=q end
+		end
+	end
+	if not best then return false end
+	if bestDist>14 then
+		Motion.travelTo(best.position,{tolerance=5})
+		return true
+	end
+	-- press prompt with side-quest dialogue filter
+	local pp=Agent.nearestPrompt(hrp.Position,15,function(p)
+		if not p.ActionText then return true end
+		local t=p.ActionText:lower()
+		for _,line in ipairs(SIDE_QUEST_DIALOGUE) do
+			if t:find(line,1,true) then return true end
+		end
+		return false
+	end)
+	if pp then firePrompt(pp.prompt); return true end
+	-- go to quest giver by name
+	if best.id then
+		local npc,root=Agent.findNPC(best.id:gsub("_"," "))
+		if npc and root then Motion.travelTo(root.Position,{tolerance=5}); return true end
+	end
+	return false
+end
+
+-- ── GARDEN / BIG CHOP SELL ───────────────────────────────────
+function Features.doGardenSell()
+	local hrp=Util.hrp(); if not hrp then return false end
+	local bigChop,root=Agent.findNPC("Big Chop")
+	if not bigChop or not root then return false end
+	if (root.Position-hrp.Position).Magnitude>10 then
+		Motion.travelTo(root.Position,{tolerance=5})
+		return true
+	end
+	-- open sell prompt
+	local pp=Agent.nearestPrompt(root.Position,12,function(p)
+		return p.ActionText and p.ActionText:lower():find("sell")~=nil
+	end)
+	if pp then firePrompt(pp.prompt); return true end
+	-- fallback: open garden menu via remote
+	local r=R("Garden") or R("GardenShop")
+	if r then pcall(function() r:FireServer("RequestOpen","Sell") end) end
+	return true
+end
+
+function Features.setAutoGardenSell(on)
+	Util.stopLoop("GardenSell")
+	if not on then return end
+	Util.startLoop("GardenSell",3,function()
+		if not Config.Values.GardenSell or not Config.Values.GardenSell.enabled then return end
+		pcall(Features.doGardenSell)
+	end)
+end
+
+-- ── MASTER FARM AGENT ─────────────────────────────────────────
+-- Runs all farm modes in priority order every tick (like starhub's main loop)
+-- Priority: auto-summon → no-stun → skills → story/bounty/elim/side/mob
+local _agentLastTick=0
+function Features.setMasterAgent(on)
+	Util.stopLoop("MasterAgent")
+	if not on then return end
+	Util.startLoop("MasterAgent",0.35,function()
+		if not Config.Values.MasterAgent or not Config.Values.MasterAgent.enabled then return end
+		local now=os.clock()
+		local cfg=Config.Values.MasterAgent
+		local hrp=Util.hrp(); if not hrp then return end
+
+		-- 1. Auto summon stand
+		if cfg.autoSummon and not Agent.standSummoned() then
+			if now > (_agentLastTick + 3) then
+				_agentLastTick=now
+				Features.summonStand()
+				return
+			end
+		end
+
+		-- 2. Auto tutorial
+		if cfg.autoTutorial and not Agent.tutorialDone() then
+			pcall(Features.runTutorialStep)
+			return
+		end
+
+		-- 3. Auto skills
+		if cfg.useSkills and not Agent.inDialogue() then
+			pcall(Features.useNextSkill)
+		end
+
+		-- 4. Story farm (highest priority after skills)
+		if cfg.story and Config.Values.Story.enabled then
+			return -- story farm handles its own loop
+		end
+
+		-- 5. Bounty agent
+		if cfg.bounty then
+			local ok,did=pcall(Features.doBountyStep)
+			if ok and did then return end
+		end
+
+		-- 6. Elimination bounty
+		if cfg.elimination then
+			local ok,did=pcall(Features.doEliminationStep)
+			if ok and did then return end
+		end
+
+		-- 7. Side quests
+		if cfg.sideQuests then
+			local ok,did=pcall(Features.doSideQuestStep)
+			if ok and did then return end
+		end
+
+		-- 8. Arrow collect
+		if cfg.autoArrow then
+			local arrows=Agent.findArrows()
+			if arrows[1] and arrows[1].distance<(Config.Values.AutoArrow and Config.Values.AutoArrow.range or 500) then
+				Motion.travelTo(arrows[1].position,{tolerance=4})
+				return
+			end
+		end
+
+		-- 9. Mob farm fallback
+		if cfg.mobFarm then
+			local enemy=Agent.nearestEnemy(nil, Config.Values.KillAura.range or 200)
+			if enemy then
+				Motion.approach(enemy)
+				Net.attack(enemy)
+			elseif cfg.serverHop then
+				-- no enemies for 20s → hop
+				Features.doServerHop()
+			end
+		end
+	end)
+end
+
+-- ── SERVER HOP (extracted from real script VM [185]) ─────────
+function Features.doServerHop()
+	local ok,res=pcall(function()
+		local http=game:GetService("HttpService")
+		local url=("https://games.roblox.com/v1/games/%d/servers/Public?limit=100&sortOrder=Asc"):format(game.PlaceId)
+		local body=game:GetService("HttpService"):GetAsync(url)
+		local decoded=http:JSONDecode(body)
+		local choices={}
+		for _,srv in ipairs(decoded.data or {}) do
+			if srv.id and srv.id~=game.JobId and (srv.playing or 0)<(srv.maxPlayers or 0) then
+				table.insert(choices,srv.id)
+				if #choices>=5 then break end
+			end
+		end
+		if #choices>0 then
+			local job=choices[math.random(#choices)]
+			game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId,job,LocalPlayer)
+		end
+	end)
+	if not ok then
+		-- fallback: regular teleport
+		pcall(function() game:GetService("TeleportService"):Teleport(game.PlaceId,LocalPlayer) end)
+	end
+end
+
+-- ── REGISTER CONFIG DEFAULTS ─────────────────────────────────
+Config.Values.AutoTutorial  = Config.Values.AutoTutorial  or {enabled=false}
+Config.Values.AutoArrow     = Config.Values.AutoArrow     or {enabled=false,range=500,interactDist=10}
+Config.Values.AutoElim      = Config.Values.AutoElim      or {enabled=false,hopOnPlayer=true}
+Config.Values.GardenSell    = Config.Values.GardenSell    or {enabled=false}
+Config.Values.MasterAgent   = Config.Values.MasterAgent   or {
+	enabled=false, autoSummon=true, autoTutorial=false,
+	useSkills=true, story=false, bounty=true,
+	elimination=true, sideQuests=true, autoArrow=false,
+	mobFarm=true, serverHop=false,
+}
+
 -- ---- 9.23  NO DASH COOLDOWN ----
 local noDashConn=nil
 function Features.setNoDashCooldown(on)
@@ -1645,7 +2468,7 @@ function Features.setNoStun(on)
 	if not on then return end
 	local function clearStun(char)
 		if not char then return end
-		-- 1. attribute-based stun (what the real script clears)
+		-- 1. attribute-based stun
 		pcall(function() char:SetAttribute("Stunned", false) end)
 		-- 2. humanoid PlatformStand
 		local hum=char:FindFirstChildOfClass("Humanoid")
@@ -1653,7 +2476,25 @@ function Features.setNoStun(on)
 			pcall(function() hum.PlatformStand=false end)
 			pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
 		end
-		-- 3. any BoolValue/NumberValue named Stun
+		-- 3. combat states table via getgenv (starhub: states.Stunned=false, states.ParryStun=false)
+		pcall(function()
+			local genv=getgenv()
+			-- starhub stores its combat module states in genv under various keys
+			local states=genv.CombatStates or genv.combatStates or genv.states
+			if states and type(states)=="table" then
+				states.Stunned=false
+				states.ParryStun=false
+			end
+			-- also try shared module pattern
+			local shared=genv.StandShared or genv.StandOut or genv.SO
+			if shared and type(shared)=="table" then
+				local cs=shared.combatStates or shared.CombatStates
+				if cs and type(cs)=="table" then
+					cs.Stunned=false; cs.ParryStun=false
+				end
+			end
+		end)
+		-- 4. any BoolValue/NumberValue named Stun
 		for _,v in ipairs(char:GetDescendants()) do
 			if v.Name:lower():find("stun") and (v:IsA("BoolValue") or v:IsA("NumberValue")) then
 				pcall(function() v.Value=v:IsA("BoolValue") and false or 0 end)
@@ -1971,6 +2812,14 @@ UILib.toggle(qs1,{"Story","p933Handoff"},{title="P9_33 Bounty Handoff"})
 UILib.toggle(qs1,{"Story","notifyLevel25"},{title="Notify: Reach Level 25 Gate"})
 UILib.toggle(qs1,{"Story","notifyYacht"},{title="Notify: Howler Yacht Steps"})
 
+-- Tutorial auto-complete
+UILib.label(qs1,"▸ Tutorial Auto-Complete")
+UILib.toggle(qs1,{"AutoTutorial","enabled"},{
+	title="Auto Tutorial",
+	desc="Auto-complete all 8 tutorial steps (run, summon, skills, stats, Meryl).",
+	onChange=function(on) Features.setAutoTutorial(on) end,
+})
+
 -- Side quests
 UILib.label(qs2,"▸ Side Quests")
 UILib.toggle(qs2,{"SideQuests","agentEnabled"},{
@@ -1980,6 +2829,27 @@ UILib.toggle(qs2,{"SideQuests","agentEnabled"},{
 })
 UILib.toggle(qs2,{"SideQuests","agentRepeat"},{title="Repeat Agent Loop"})
 UILib.toggle(qs2,{"SideQuests","banditEnabled"},{title="Bandit Problem"})
+
+UILib.label(qs2,"▸ Smart Side Quest Agent")
+UILib.toggle(qs2,{"SideQuestSmart","enabled"},{
+	title="Smart Side Quest",
+	desc="Full agent: pick nearest available side quest, do steps, handle Usagi/D'Arby/Caesar specials.",
+	onChange=function(on)
+		Util.stopLoop("SmartSideQuest")
+		if not on then return end
+		Util.startLoop("SmartSideQuest",0.4,function()
+			if not (Config.Values.SideQuestSmart and Config.Values.SideQuestSmart.enabled) then return end
+			pcall(Features.doSideQuestStep)
+		end)
+	end,
+})
+
+UILib.label(qs2,"▸ Garden Sell")
+UILib.toggle(qs2,{"GardenSell","enabled"},{
+	title="Auto Sell Harvest",
+	desc="Travel to Big Chop shop and sell garden harvest.",
+	onChange=function(on) Features.setAutoGardenSell(on) end,
+})
 
 -- Quest Settings
 UILib.label(qs2,"▸ Quest Settings")
@@ -2087,6 +2957,19 @@ UILib.button(mt1,{
 	end,
 })
 UILib.slider(mt1,{"MobFarm","radius"},{title="Search Radius",min=10,max=1000,default=250})
+UILib.toggle(mt1,{"MobFarm","autoHop"},{
+	title="Auto Server-Hop",
+	desc="Hop servers after 20s with no hittable enemies.",
+})
+
+UILib.label(mt1,"▸ Arrow Farm")
+UILib.toggle(mt1,{"AutoArrow","enabled"},{
+	title="Auto Arrow",
+	desc="Auto-travel to and collect arrow pickups from the map.",
+	onChange=function(on) Features.setAutoArrow(on) end,
+})
+UILib.slider(mt1,{"AutoArrow","range"},{title="Scan Range",min=50,max=2000,default=500})
+UILib.slider(mt1,{"AutoArrow","interactDist"},{title="Interact Distance",min=3,max=25,default=10})
 
 UILib.label(mt1,"▸ Recovery")
 UILib.toggle(mt1,{"Recovery","enabled"},{title="Back Off When Low"})
